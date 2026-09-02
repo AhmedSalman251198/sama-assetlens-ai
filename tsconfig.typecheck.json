@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "types": ["node", "react", "react-dom"]
+  },
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "next.config.ts",
+    "postcss.config.mjs"
+  ],
+  "exclude": ["node_modules", ".next", "dist", "build"]
+}

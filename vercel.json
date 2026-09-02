@@ -1,0 +1,10 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "installCommand": "npm ci",
+  "functions": {
+    "app/api/analyze/route.ts": { "maxDuration": 60 },
+    "app/api/assets/route.ts": { "maxDuration": 60 },
+    "app/api/jobs/route.ts": { "maxDuration": 60 }
+  }
+}
