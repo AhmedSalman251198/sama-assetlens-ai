@@ -5,12 +5,16 @@ import { apiGet, ApiClientError } from "./api-client";
 
 export type StructureFloor = { id: string; name: string; sortOrder: number };
 export type StructureZone = { id: string; floorId: string | null; name: string };
-export type StructureBuilding = { id: string; name: string; floors: StructureFloor[]; zones: StructureZone[] };
+export type StructureOffice = { id: string; floorId: string | null; zoneId: string | null; name: string };
+export type StructureLocationOption = { id: string; buildingId: string | null; floorId: string | null; zoneId: string | null; name: string };
+export type StructureLocationLevel = { id: string; key: string; labelAr: string; labelEn: string; required: boolean; sortOrder: number; options: StructureLocationOption[] };
+export type StructureBuilding = { id: string; name: string; floors: StructureFloor[]; zones: StructureZone[]; offices: StructureOffice[] };
 export type StructureProject = {
-  id: string; name: string; requireBuilding: boolean; requireFloor: boolean; requireZone: boolean; allowManual: boolean;
+  id: string; name: string; requireBuilding: boolean; requireFloor: boolean; requireZone: boolean; requireOffice: boolean; allowManual: boolean;
   buildings: StructureBuilding[];
+  locationLevels: StructureLocationLevel[];
 };
-export type StructureConfig = { currentUser: { id: string; email: string; name: string; role: "admin" | "surveyor" }; projects: StructureProject[]; error?: string };
+export type StructureConfig = { currentUser: { id: string; email: string; name: string; role: "admin" | "project_manager" | "reviewer" | "surveyor" | "viewer" }; projects: StructureProject[]; error?: string };
 
 export function useStructure() {
   const [data, setData] = useState<StructureConfig | null>(null);

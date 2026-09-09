@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { buildGeminiModelCandidates, isGeminiModelUnavailable } from "../app/lib/server/gemini-models.mjs";
+import { parseAnalysis } from "../app/lib/server/analyze-images.ts";
+import { canUseModule, defaultModulePermissions, normalizeModulePermissions } from "../app/lib/module-permissions.ts";
 
 async function readText(path) {
   return readFile(new URL(path, import.meta.url), "utf8");
@@ -24,7 +26,8 @@ test("the unified shell provides real navigation and an operable mobile drawer",
   const shell = await readText("../app/components/app-shell.tsx");
   const layout = await readText("../app/layout.tsx");
   const css = await readText("../app/globals.css");
-  for (const route of ["/capture", "/assets", "/organization", "/locations", "/transfers", "/reports", "/admin"]) assert.match(shell, new RegExp(`href: \"${route}\"`));
+  for (const route of ["/capture", "/organization", "/locations", "/transfers", "/reports", "/admin"]) assert.match(shell, new RegExp(`href: \"${route}\"`));
+  assert.doesNotMatch(shell, /href: "\/assets"/);
   assert.match(shell, /onClick=\{\(\) => setDrawerOpen\(true\)\}/);
   assert.match(shell, /aria-controls="assetlens-navigation"/);
   assert.match(shell, /event\.key === "Escape"/);
@@ -34,12 +37,13 @@ test("the unified shell provides real navigation and an operable mobile drawer",
   assert.match(css, /@media \(max-width:760px\)/);
 });
 
-test("dashboard is analytics-only and uses a compact server snapshot", async () => {
+test("dashboard is analytics-only, radial, and uses a compact server snapshot", async () => {
   const page = await readText("../app/page.tsx");
   const route = await readText("../app/api/dashboard/route.ts");
   const migration = await readText("../supabase/migrations/006_performance_config_snapshot.sql");
-  assert.match(page, /ActivityChart/);
-  assert.match(page, /نشاط الالتقاط والتحليل/);
+  assert.match(page, /CriticalityRadialChart/);
+  assert.match(page, /رسم شعاعي يوضح عدد الأصول/);
+  assert.match(page, /\/reports\?criticality=/);
   assert.match(page, /\/api\/dashboard/);
   assert.doesNotMatch(page, /dropzone|transfer-section|organization-command|register-table|dash-recent|<table/);
   assert.match(route, /rpc\/assetlens_dashboard_snapshot/);
@@ -49,16 +53,18 @@ test("dashboard is analytics-only and uses a compact server snapshot", async () 
   assert.doesNotMatch(migration, /'recent'/);
 });
 
-test("asset register is server-paginated and deep links work across pages", async () => {
+test("asset register is merged into reports and legacy deep links stay safe", async () => {
   const assetsPage = await readText("../app/assets/page.tsx");
   const assetApi = await readText("../app/api/assets/route.ts");
   const reports = await readText("../app/reports/page.tsx");
   const locations = await readText("../app/locations/page.tsx");
   const capture = await readText("../app/capture/page.tsx");
-  assert.match(assetsPage, /pageSize:\s*"50"/);
+  assert.match(assetsPage, /redirect\("\/reports"\)/);
   assert.match(assetApi, /supabaseRestWithCount/);
   assert.match(assetApi, /view === "list" \|\| view === "transfer"/);
   assert.match(reports, /\[row\.id, row\.assetNo/);
+  assert.match(reports, /setDetail\(row\)/);
+  assert.match(reports, /\/transfers\?asset=/);
   assert.match(locations, /\/capture\?project=\$\{building\.projectId\}&building=\$\{building\.id\}/);
   assert.match(locations, /params\.get\("building"\)/);
   assert.match(capture, /prefillAppliedRef/);
@@ -125,6 +131,7 @@ test("PWA shell includes offline capture and avoids caching login or APIs", asyn
   const worker = await readText("../public/sw.js");
   const offlineQueue = await readText("../app/lib/offline-queue.ts");
   const shell = await readText("../app/components/app-shell.tsx");
+  const layout = await readText("../app/layout.tsx");
   const css = await readText("../app/globals.css");
   assert.equal(manifest.display, "standalone");
   assert.equal(manifest.shortcuts.length, 3);
@@ -136,9 +143,70 @@ test("PWA shell includes offline capture and avoids caching login or APIs", asyn
   assert.match(worker, /url\.searchParams\.has\("_rsc"\)/);
   assert.match(worker, /Next-Router-State-Tree/);
   assert.match(shell, /updateViaCache: "none"/);
-  assert.match(shell, /SERVICE_WORKER_VERSION = "14\.0\.0"/);
+  assert.match(shell, /SERVICE_WORKER_VERSION = "16\.3\.0"/);
+  assert.match(shell, /process\.env\.NODE_ENV !== "production"/);
+  assert.match(layout, /data-scroll-behavior="smooth"/);
+  assert.match(layout, /assetlens_dev_cache_reset_16_3_0/);
+  assert.match(css, /\.auth-logo\s*\{[\s\S]*?height:auto;/);
   assert.match(css, /\.al-content>\.assetlens-shell>\.app-sidebar/);
   assert.match(offlineQueue, /indexedDB\.open/);
+});
+
+test("offline asset QR stores the Supabase snapshot and renders without a network request", async () => {
+  const reports = await readText("../app/reports/page.tsx");
+  const qr = await readText("../app/lib/asset-qr.ts");
+  const endpoint = await readText("../app/api/assets/[id]/qr/route.ts");
+  const scan = await readText("../app/scan/page.tsx");
+  const worker = await readText("../public/sw.js");
+  assert.match(reports, /\/api\/assets\/\$\{encodeURIComponent\(row\.id\)\}\/qr/);
+  assert.match(reports, /force: true/);
+  assert.match(reports, /buildAssetQrPayload\(snapshot\.source\)/);
+  assert.match(reports, /createAssetQrText\(payload\)/);
+  assert.match(reports, /QRCode\.toDataURL/);
+  assert.match(reports, /width: 620, margin: 4/);
+  assert.match(reports, /width:190px;height:190px/);
+  assert.doesNotMatch(reports, /api\.qrserver\.com/);
+  assert.match(endpoint, /asset_custom_values/);
+  assert.match(endpoint, /custom_fields/);
+  assert.match(endpoint, /id=eq\.\$\{encodeURIComponent\(id\)\}/);
+  assert.match(qr, /Asset ID/);
+  assert.match(qr, /source\.customValues/);
+  assert.match(qr, /CURRENT_PREFIX = "alqr2"/);
+  assert.match(qr, /ASSETLENS-OFFLINE-V2/);
+  assert.match(qr, /CompressionStream/);
+  assert.match(scan, /parseAssetQrValue\(window\.location\.href\)/);
+  assert.match(worker, /"\/scan"/);
+});
+
+test("mobile web offers separate camera and gallery controls", async () => {
+  const capture = await readText("../app/capture/page.tsx");
+  assert.match(capture, /cameraInputRef/);
+  assert.match(capture, /capture="environment"/);
+  assert.match(capture, /اختيار من المعرض/);
+  assert.match(capture, /التقاط بالكاميرا/);
+  assert.match(capture, /ref=\{inputRef\} hidden type="file" multiple accept="image\/jpeg,image\/png,image\/webp" onChange/);
+});
+
+test("self signup is removed and account management is super-admin only", async () => {
+  const login = await readText("../app/login/page.tsx");
+  const config = await readText("../app/api/config/route.ts");
+  const admin = await readText("../app/admin/page.tsx");
+  const migration = await readText("../supabase/migrations/009_roles_offices_accounts.sql");
+  const signupGuard = await readText("../supabase/migrations/007_super_admin_account_control.sql");
+  assert.doesNotMatch(login, /signUp|mode === "signup"|إنشاء حساب جديد/);
+  assert.match(login, /إنشاء الحسابات والدعوات متاح فقط للسوبر أدمن/);
+  assert.match(config, /accountActions/);
+  assert.match(config, /isSuperAdminEmail\(auth\.actor\.email\)/);
+  assert.match(config, /action === "createUser" && !rows\[0\]\?\.user_id/);
+  assert.match(config, /createSupabasePasswordUser/);
+  assert.match(admin, /إنشاء حساب مباشر/);
+  assert.match(admin, /تغيير كلمة المرور/);
+  assert.match(admin, /value=\{userPassword\}/);
+  assert.match(config, /validPassword/);
+  assert.match(config, /updateSupabaseUserPassword/);
+  assert.doesNotMatch(admin, /إرسال الدعوة/);
+  assert.match(migration, /eng\.ahmedsalman96@gmail\.com/);
+  assert.match(signupGuard, /has not been approved by the AssetLens super administrator/);
 });
 
 test("database policies and audit controls remain enabled", async () => {
@@ -185,4 +253,140 @@ test("R14 database snapshots and compact bulk uploads remove repeated round trip
   assert.match(assetsRoute, /Promise\.all\(images\.map/);
   assert.match(capture, /\/api\/assets\?compact=1/);
   assert.match(supabase, /AbortSignal\.timeout/);
+});
+
+test("R15 adds dynamic asset fields, manual capture, filtered dashboards and branded loading", async () => {
+  const migration = await readText("../supabase/migrations/008_global_product_upgrade.sql");
+  const config = await readText("../app/api/config/route.ts");
+  const capture = await readText("../app/capture/page.tsx");
+  const assets = await readText("../app/api/assets/route.ts");
+  const dashboard = await readText("../app/api/dashboard/route.ts");
+  const dashboardPage = await readText("../app/page.tsx");
+  const analyzer = await readText("../app/lib/server/analyze-images.ts");
+  const queue = await readText("../app/lib/server/asset-queue.ts");
+  const shell = await readText("../app/components/app-shell.tsx");
+  const css = await readText("../app/globals.css");
+  assert.match(migration, /asset_types text\[\]/);
+  assert.match(migration, /assetlens_dashboard_filtered/);
+  assert.match(migration, /as series\(generated_at\)/);
+  assert.doesNotMatch(migration, /\)::date day/);
+  assert.match(migration, /project_stats as/);
+  assert.doesNotMatch(migration, /jsonb_agg[\s\S]{0,500}max\(asset_count\) over/);
+  assert.match(config, /show_in_qr/);
+  assert.match(capture, /captureStep/);
+  assert.match(capture, /createManualAsset/);
+  assert.match(assets, /action.*createManual/);
+  assert.match(dashboard, /rpc\/assetlens_dashboard_filtered/);
+  assert.match(dashboardPage, /dashboard-filters/);
+  assert.match(analyzer, /Administrator-configured fields/);
+  assert.match(queue, /configuredAnalysisFields/);
+  assert.match(shell, /al-navigation-loader/);
+  assert.match(css, /font-family:"Cairo",system-ui/);
+});
+
+test("R16 supports administrator-defined location levels across capture, reports, transfers and QR", async () => {
+  const migration = await readText("../supabase/migrations/009_roles_offices_accounts.sql");
+  const config = await readText("../app/api/config/route.ts");
+  const admin = await readText("../app/admin/page.tsx");
+  const capture = await readText("../app/capture/page.tsx");
+  const assets = await readText("../app/api/assets/route.ts");
+  const reports = await readText("../app/reports/page.tsx");
+  const transfers = await readText("../app/transfers/page.tsx");
+  const qr = await readText("../app/lib/asset-qr.ts");
+  assert.match(migration, /create table if not exists public\.location_levels/);
+  assert.match(migration, /create table if not exists public\.location_options/);
+  assert.match(migration, /additional_locations jsonb not null default '\[\]'::jsonb/);
+  assert.match(migration, /admins manage location levels/);
+  for (const source of [config, admin, capture, assets, reports, transfers, qr]) assert.match(source, /additionalLocations|locationLevels/);
+  assert.match(config, /addLocationLevel/);
+  assert.match(config, /deleteLocationLevel/);
+  assert.match(config, /updateLocationLevel/);
+  assert.match(admin, /اجعله اختياريًا/);
+  assert.match(capture, /dynamicLocationsValid/);
+  assert.match(assets, /does not belong to this (building|floor|zone)/);
+});
+
+test("R16 always returns core asset identity fields even when AI values are empty", () => {
+  const parsed = parseAnalysis(JSON.stringify({ assetType: "Pump", fields: [], warnings: [], overallConfidence: 0.8 }), [
+    { key: "color", label: "Color" },
+  ]);
+  assert.deepEqual(parsed.fields.slice(0, 4).map(field => field.key), ["assetName", "manufacturer", "modelNumber", "serialNumber"]);
+  assert.equal(parsed.fields.find(field => field.key === "color")?.value, "");
+});
+
+test("R16.1 requires and exports a five-level asset condition rating", async () => {
+  const migration = await readText("../supabase/migrations/010_asset_condition_rating.sql");
+  const capture = await readText("../app/capture/page.tsx");
+  const assets = await readText("../app/api/assets/route.ts");
+  const reports = await readText("../app/reports/page.tsx");
+  const qr = await readText("../app/lib/asset-qr.ts");
+  const levels = await readText("../app/lib/asset-condition.ts");
+  assert.match(migration, /condition_rating smallint/);
+  assert.match(migration, /check \(condition_rating between 1 and 5\)/);
+  assert.match(capture, /asset-condition-rating/);
+  assert.match(capture, /ASSET_CONDITION_LEVELS\.map/);
+  assert.match(capture, /pre-capture-condition/);
+  assert.match(capture, /قبل إرفاق أي صورة للتحليل/);
+  assert.match(assets, /Choose the asset condition rating from 1 to 5 before saving/);
+  assert.match(reports, /Condition Rating/);
+  assert.match(qr, /Asset Condition Rating/);
+  assert.equal((levels.match(/rating: [1-5]/g) || []).length, 5);
+});
+
+test("R16.2 derives weight from criticality and filters reports and dashboards", async () => {
+  const migration = await readText("../supabase/migrations/011_asset_criticality_weighted_dashboard.sql");
+  const capture = await readText("../app/capture/page.tsx");
+  const reports = await readText("../app/reports/page.tsx");
+  const dashboard = await readText("../app/page.tsx");
+  const levels = await readText("../app/lib/asset-criticality.ts");
+  assert.match(migration, /criticality_rating smallint/);
+  assert.match(migration, /assetlens_criticality_snapshot/);
+  assert.match(migration, /condition_rating <= 2/);
+  assert.match(capture, /أهمية الأصل \(Criticality\)/);
+  assert.match(capture, /لا توجد خانة وزن منفصلة/);
+  assert.match(reports, /كل درجات الأهمية/);
+  assert.match(reports, /Asset Weight/);
+  assert.match(dashboard, /توزيع أهمية الأصول/);
+  assert.match(dashboard, /تأثير الأعطال الموزون/);
+  assert.equal((levels.match(/rating: [1-5], weight: [1-5]/g) || []).length, 5);
+});
+
+test("R16.3 enforces condition evidence, idempotent manual creation, and per-asset Bulk ratings", async () => {
+  const migration = await readText("../supabase/migrations/012_condition_justification_module_permissions.sql");
+  const capture = await readText("../app/capture/page.tsx");
+  const assets = await readText("../app/api/assets/route.ts");
+  const reports = await readText("../app/reports/page.tsx");
+  assert.match(migration, /condition_justification text not null default ''/);
+  assert.match(migration, /assets_poor_condition_justification_check/);
+  assert.match(capture, /condition-justification/);
+  assert.match(capture, /bulk-rating-list/);
+  assert.match(capture, /bulkRatingsComplete/);
+  assert.match(capture, /manualSubmissionIdRef/);
+  assert.match(capture, /تم تصفير النموذج للبدء من جديد/);
+  assert.match(assets, /validatedConditionJustification/);
+  assert.match(assets, /offline_client_id=eq/);
+  assert.match(assets, /created: false, duplicate: true/);
+  assert.match(reports, /Condition Justification/);
+  assert.match(reports, /conditionJustification/);
+});
+
+test("R16.3 module permissions hide tabs and deny disallowed actions", async () => {
+  const migration = await readText("../supabase/migrations/012_condition_justification_module_permissions.sql");
+  const shell = await readText("../app/components/app-shell.tsx");
+  const config = await readText("../app/api/config/route.ts");
+  const admin = await readText("../app/admin/page.tsx");
+  const assets = await readText("../app/api/assets/route.ts");
+  assert.match(migration, /create table if not exists public\.user_module_permissions/);
+  assert.match(migration, /private\.has_module_permission/);
+  assert.match(shell, /canUseModule/);
+  assert.match(shell, /visibleNavigation/);
+  assert.match(config, /normalizeModulePermissions/);
+  assert.match(config, /Only the AssetLens super administrator can create or manage user accounts/);
+  assert.match(admin, /صلاحيات القائمة الجانبية والإجراءات/);
+  assert.match(assets, /hasModuleAccess/);
+  const reviewer = defaultModulePermissions("reviewer");
+  assert.equal(canUseModule(reviewer, "administration"), false);
+  assert.equal(canUseModule(reviewer, "reports", "approve"), true);
+  const normalized = normalizeModulePermissions([{ module: "capture", view: false, create: true }], "surveyor");
+  assert.equal(canUseModule(normalized, "capture", "create"), false);
 });

@@ -13,7 +13,11 @@ export type AnalysisResult = {
   warnings: string[];
   rawText: string;
   overallConfidence: number;
+  conditionRating?: number | null;
+  conditionJustification?: string;
+  criticalityRating?: number | null;
 };
+export type RequestedAnalysisField = { key: string; label: string; unit?: string; assetTypes?: string[] };
 
 const analysisPrompt = `You are an industrial asset nameplate extraction specialist. Analyze all supplied images to extract technical data from nameplates, labels, or tables.
 
@@ -24,6 +28,12 @@ Rules:
 - If a field is not visible, return an empty string. Never hallucinate values.
 - Confidence is per field (0.0 to 1.0).
 - rawText should be a full transcription of the plate text.`;
+
+function promptFor(requestedFields: RequestedAnalysisField[]) {
+  if (!requestedFields.length) return analysisPrompt;
+  const configured = requestedFields.slice(0, 40).map(field => `- key=${field.key}; label=${field.label}${field.unit ? `; unit=${field.unit}` : ""}${field.assetTypes?.length ? `; only for asset types: ${field.assetTypes.join(", ")}` : ""}`).join("\n");
+  return `${analysisPrompt}\n\nAdministrator-configured fields:\n${configured}\nWhen a configured field is visible and relevant to the detected asset type, include it in the fields array using the exact configured key and label. If it is not visible, do not invent it.`;
+}
 
 const analysisSchema = {
   type: "object",
@@ -115,7 +125,7 @@ async function discoverGeminiModels(apiKey: string, deadline: number) {
   }
 }
 
-export async function analyzeWithGemini(apiKey: string, preferredModel: string, images: EncodedImage[]) {
+export async function analyzeWithGemini(apiKey: string, preferredModel: string, images: EncodedImage[], requestedFields: RequestedAnalysisField[] = []) {
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
   const deadline = Date.now() + 45_000;
   let uniqueModels = buildGeminiModelCandidates(preferredModel);
@@ -142,7 +152,7 @@ export async function analyzeWithGemini(apiKey: string, preferredModel: string, 
           body: JSON.stringify({
             contents: [{
               parts: [
-                { text: analysisPrompt },
+                { text: promptFor(requestedFields) },
                 ...images.map(img => ({
                   inlineData: {
                     mimeType: img.mimeType,
@@ -218,14 +228,14 @@ export async function analyzeWithGemini(apiKey: string, preferredModel: string, 
   throw new Error(`خدمة التحليل مشغولة حاليًا. حاول مرة أخرى بعد قليل${lastError ? `: ${lastError}` : "."}`);
 }
 
-async function analyzeWithOpenAI(apiKey: string, model: string, images: EncodedImage[]) {
+async function analyzeWithOpenAI(apiKey: string, model: string, images: EncodedImage[], requestedFields: RequestedAnalysisField[] = []) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 45_000);
   try {
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST", signal: controller.signal,
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, store: false, input: [{ role: "user", content: [{ type: "input_text", text: analysisPrompt }, ...images.map(image => ({ type: "input_image", image_url: `data:${image.mimeType};base64,${image.data}`, detail: "high" }))] }], text: { format: { type: "json_schema", name: "asset_nameplate_analysis", strict: true, schema: analysisSchema } } }),
+      body: JSON.stringify({ model, store: false, input: [{ role: "user", content: [{ type: "input_text", text: promptFor(requestedFields) }, ...images.map(image => ({ type: "input_image", image_url: `data:${image.mimeType};base64,${image.data}`, detail: "high" }))] }], text: { format: { type: "json_schema", name: "asset_nameplate_analysis", strict: true, schema: analysisSchema } } }),
     });
     const payload = await response.json() as Record<string, unknown>;
     if (!response.ok) throw new Error(apiError(payload, "OpenAI rejected the analysis request."));
@@ -249,7 +259,7 @@ function confidence(value: unknown) {
   return Number.isFinite(numeric) ? Math.min(1, Math.max(0, numeric)) : 0;
 }
 
-function parseAnalysis(text: string): AnalysisResult {
+export function parseAnalysis(text: string, requestedFields: RequestedAnalysisField[] = []): AnalysisResult {
   const cleanJson = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   const result = JSON.parse(cleanJson) as Record<string, unknown>;
   const fields = Array.isArray(result.fields) ? result.fields.flatMap(item => {
@@ -261,17 +271,24 @@ function parseAnalysis(text: string): AnalysisResult {
   }) : [];
 
   const canonical = [
-    ["assetName", "Asset Name"], ["manufacturer", "Manufacturer"], ["modelNumber", "Model Number"],
-    ["serialNumber", "Serial Number"], ["ratedPower", "Rated Power"], ["voltage", "Voltage"],
-    ["frequency", "Frequency"], ["current", "Current"], ["speed", "Speed"],
-    ["ipRating", "IP Rating"], ["year", "Year"], ["notes", "Notes"],
+    ["assetName", "Asset Name", true], ["manufacturer", "Manufacturer / Brand", true],
+    ["modelNumber", "Model Number", true], ["serialNumber", "Serial Number", true],
+    ["ratedPower", "Rated Power", false], ["voltage", "Voltage", false],
+    ["frequency", "Frequency", false], ["current", "Current", false], ["speed", "Speed", false],
+    ["ipRating", "IP Rating", false], ["year", "Year", false], ["notes", "Notes", false],
   ] as const;
   const normalizedKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
-  for (const [key, label] of canonical) {
+  for (const [key, label, alwaysVisible] of canonical) {
     const value = cleanString(result[key], 2_000);
-    if (value && !fields.some(field => normalizedKey(field.key) === normalizedKey(key))) fields.push({ key, label, value, confidence: confidence(result.overallConfidence) });
+    if ((value || alwaysVisible) && !fields.some(field => normalizedKey(field.key) === normalizedKey(key))) {
+      fields.push({ key, label, value, confidence: value ? confidence(result.overallConfidence) : 0 });
+    }
   }
-  if (!fields.length) throw new Error("AI analysis returned no usable fields.");
+  for (const requested of requestedFields) {
+    const key = cleanString(requested.key, 80);
+    if (!key || fields.some(field => normalizedKey(field.key) === normalizedKey(key))) continue;
+    fields.push({ key, label: cleanString(requested.label, 120) || key, value: "", confidence: 0 });
+  }
   return {
     assetType: cleanString(result.assetType, 200),
     summary: cleanString(result.summary, 2_000),
@@ -282,7 +299,7 @@ function parseAnalysis(text: string): AnalysisResult {
   };
 }
 
-export async function analyzeEncodedImages(images: EncodedImage[], sessionGeminiKey = "") {
+export async function analyzeEncodedImages(images: EncodedImage[], sessionGeminiKey = "", requestedFields: RequestedAnalysisField[] = []) {
   const runtimeEnv = process.env as Record<string, string | undefined>;
   const envGeminiKey = runtimeEnv.GEMINI_API_KEY;
   const geminiKey = (sessionGeminiKey && sessionGeminiKey.length <= 512)
@@ -293,14 +310,14 @@ export async function analyzeEncodedImages(images: EncodedImage[], sessionGemini
   if (!geminiKey && !openaiKey) throw new Error("Gemini API is not configured yet. Add GEMINI_API_KEY to enable image analysis.");
   const preferredProvider = runtimeEnv.AI_PROVIDER || "gemini";
   const text = preferredProvider === "gemini" && geminiKey
-    ? await analyzeWithGemini(geminiKey, runtimeEnv.GEMINI_MODEL || "gemini-3.7-flash", images)
+    ? await analyzeWithGemini(geminiKey, runtimeEnv.GEMINI_MODEL || "gemini-3.7-flash", images, requestedFields)
     : openaiKey
-      ? await analyzeWithOpenAI(openaiKey, runtimeEnv.OPENAI_VISION_MODEL || "gpt-4o", images)
+      ? await analyzeWithOpenAI(openaiKey, runtimeEnv.OPENAI_VISION_MODEL || "gpt-4o", images, requestedFields)
       : geminiKey
-        ? await analyzeWithGemini(geminiKey, runtimeEnv.GEMINI_MODEL || "gemini-3.7-flash", images)
+        ? await analyzeWithGemini(geminiKey, runtimeEnv.GEMINI_MODEL || "gemini-3.7-flash", images, requestedFields)
         : "";
   if (!text) throw new Error("The selected AI provider is not configured.");
-  try { return parseAnalysis(text); }
+  try { return parseAnalysis(text, requestedFields); }
   catch (error) {
     if (error instanceof SyntaxError) throw new Error("AI analysis returned malformed JSON. Please retry with a clearer image.");
     throw error;

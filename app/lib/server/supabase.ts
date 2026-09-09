@@ -1,4 +1,7 @@
+import { randomBytes } from "node:crypto";
+
 const SUPABASE_CONFIG_ERROR = "إعدادات Supabase غير مكتملة. أضف SUPABASE_URL و SUPABASE_PUBLISHABLE_KEY داخل .env.local أو متغيرات النشر.";
+const SUPABASE_ADMIN_CONFIG_ERROR = "إدارة الحسابات تحتاج SUPABASE_SECRET_KEY (الموصى به) أو SUPABASE_SERVICE_ROLE_KEY داخل متغيرات الخادم فقط، ثم إعادة نشر الموقع.";
 const API_TIMEOUT_MS = 15_000;
 
 function timedSignal(signal: AbortSignal | null | undefined, timeoutMs = API_TIMEOUT_MS) {
@@ -11,6 +14,16 @@ export function supabaseSettings() {
   const key = (runtimeEnv.SUPABASE_PUBLISHABLE_KEY || runtimeEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || runtimeEnv.SUPABASE_ANON_KEY || runtimeEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
   if (!url || !key) throw new Error(SUPABASE_CONFIG_ERROR);
   return { url: url.replace(/\/$/, ""), key };
+}
+
+function supabaseAdminSettings() {
+  const { url } = supabaseSettings();
+  const runtimeEnv = process.env as Record<string, string | undefined>;
+  // Supabase recommends the newer sb_secret_ key. Keep accepting the legacy
+  // service_role JWT so existing deployments continue to work during migration.
+  const serviceKey = (runtimeEnv.SUPABASE_SECRET_KEY || runtimeEnv.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  if (!serviceKey) throw new Error(SUPABASE_ADMIN_CONFIG_ERROR);
+  return { url, serviceKey };
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -73,12 +86,33 @@ export async function supabaseRestWithCount<T>(path: string, token: string, init
   return { data: await parseResponse<T>(response), count: match ? Number(match[1]) : 0 };
 }
 
-export async function sendSupabaseMagicLink(email: string, name: string) {
-  const { url, key } = supabaseSettings();
-  const response = await fetch(`${url}/auth/v1/otp`, {
+export function generateInitialPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const bytes = randomBytes(15);
+  const body = Array.from(bytes, byte => alphabet[byte % alphabet.length]).join("");
+  return `Al!${body}9`;
+}
+
+export async function createSupabasePasswordUser(email: string, name: string, password: string) {
+  const { url, serviceKey } = supabaseAdminSettings();
+  const response = await fetch(`${url}/auth/v1/admin/users`, {
     method: "POST",
-    headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ email: email.toLowerCase(), create_user: true, data: { name } }),
+    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ email: email.toLowerCase(), password, email_confirm: true, user_metadata: { name } }),
+    signal: timedSignal(undefined),
+  });
+  const payload = await parseResponse<{ id?: string; user?: { id?: string } }>(response);
+  const id = payload.id || payload.user?.id || "";
+  if (!id) throw new Error("Supabase created the account without returning its identifier.");
+  return id;
+}
+
+export async function updateSupabaseUserPassword(userId: string, password: string) {
+  const { url, serviceKey } = supabaseAdminSettings();
+  const response = await fetch(`${url}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PUT",
+    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
     signal: timedSignal(undefined),
   });
   await parseResponse<Record<string, unknown>>(response);

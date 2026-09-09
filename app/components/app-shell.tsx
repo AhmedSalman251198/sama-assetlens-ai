@@ -5,27 +5,27 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, ApiClientError, invalidateApiCache, prefetchApi } from "../lib/api-client";
-import { signOut } from "../lib/supabase-auth";
+import { changePassword, signOut } from "../lib/supabase-auth";
+import { canUseModule, ModuleKey, ModulePermission } from "../lib/module-permissions";
 
-type Me = { name: string; email: string; role: "admin" | "surveyor" };
-type NavItem = { href: string; label: string; labelAr: string; icon: IconName; adminOnly?: boolean };
+type UserRole = "admin" | "project_manager" | "reviewer" | "surveyor" | "viewer";
+type Me = { name: string; email: string; role: UserRole; modules: ModuleKey[]; modulePermissions: ModulePermission[] };
+type NavItem = { href: string; label: string; labelAr: string; icon: IconName; module: ModuleKey };
 type IconName = "dashboard" | "capture" | "assets" | "organization" | "location" | "transfer" | "reports" | "admin" | "chevron" | "menu" | "close" | "logout" | "wifi";
 
 const navigation: NavItem[] = [
-  { href: "/", label: "Dashboard", labelAr: "لوحة التحكم", icon: "dashboard" },
-  { href: "/capture", label: "Capture & Analyze", labelAr: "التقاط وتحليل", icon: "capture" },
-  { href: "/assets", label: "Asset Register", labelAr: "سجل الأصول", icon: "assets" },
-  { href: "/organization", label: "Organization", labelAr: "المشاريع والهيكل", icon: "organization" },
-  { href: "/locations", label: "Locations", labelAr: "المواقع", icon: "location" },
-  { href: "/transfers", label: "Asset Transfer", labelAr: "نقل الأصول", icon: "transfer" },
-  { href: "/reports", label: "Reports", labelAr: "التقارير", icon: "reports" },
-  { href: "/admin", label: "Administration", labelAr: "الإدارة", icon: "admin", adminOnly: true },
+  { href: "/", label: "Dashboard", labelAr: "لوحة التحكم", icon: "dashboard", module: "dashboard" },
+  { href: "/capture", label: "Capture & Analyze", labelAr: "التقاط وتحليل", icon: "capture", module: "capture" },
+  { href: "/organization", label: "Organization", labelAr: "المشاريع والهيكل", icon: "organization", module: "organization" },
+  { href: "/locations", label: "Locations", labelAr: "المواقع", icon: "location", module: "locations" },
+  { href: "/transfers", label: "Asset Transfer", labelAr: "نقل الأصول", icon: "transfer", module: "transfers" },
+  { href: "/reports", label: "Reports", labelAr: "التقارير", icon: "reports", module: "reports" },
+  { href: "/admin", label: "Administration", labelAr: "الإدارة", icon: "admin", module: "administration" },
 ];
 
 const pageTitles: Record<string, { ar: string; en: string }> = {
   "/": { ar: "لوحة التحكم", en: "Dashboard" },
   "/capture": { ar: "التقاط وتحليل أصل", en: "Capture & Analyze" },
-  "/assets": { ar: "سجل الأصول", en: "Asset Register" },
   "/organization": { ar: "المشاريع والهيكل", en: "Organization" },
   "/locations": { ar: "المواقع", en: "Locations" },
   "/transfers": { ar: "نقل الأصول", en: "Asset Transfer" },
@@ -33,7 +33,8 @@ const pageTitles: Record<string, { ar: string; en: string }> = {
   "/admin": { ar: "إدارة النظام", en: "Administration" },
 };
 
-const SERVICE_WORKER_VERSION = "14.0.0";
+const SERVICE_WORKER_VERSION = "16.3.0";
+const roleLabels: Record<UserRole, string> = { admin: "Administrator", project_manager: "Project Manager", reviewer: "Reviewer", surveyor: "Surveyor", viewer: "Viewer" };
 
 function Icon({ name }: { name: IconName }) {
   const common = { width: 20, height: 20, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
@@ -65,6 +66,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [online, setOnline] = useState(true);
   const [me, setMe] = useState<Me | null>(null);
   const [navigatingTo, setNavigatingTo] = useState("");
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState("");
   const profileRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -87,6 +93,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
+    // A development service worker can serve an old route bundle under the
+    // same webpack URL, which makes the client navigation differ from SSR.
+    // The root layout clears an existing development cache once; never create
+    // a new one while running `npm run dev`.
+    if (process.env.NODE_ENV !== "production") return;
     let active = true;
     const hadController = Boolean(navigator.serviceWorker.controller);
     const reloadMarker = `assetlens_sw_reloaded_${SERVICE_WORKER_VERSION}`;
@@ -110,7 +121,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (pathname === "/login") return;
+    if (pathname === "/login" || pathname === "/scan") return;
     if (me) return;
     let active = true;
     void (async () => {
@@ -126,7 +137,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, [pathname, router, me]);
 
   useEffect(() => {
-    if (!me || !online || pathname === "/login") return;
+    if (!me || !online || pathname === "/login" || pathname === "/scan") return;
     const timer = window.setTimeout(() => {
       void prefetchApi("/api/config?scope=structure", 5 * 60_000);
     }, 700);
@@ -159,11 +170,23 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return () => { document.body.style.overflow = previous; window.removeEventListener("keydown", onKey); };
   }, [drawerOpen]);
 
-  const visibleNavigation = useMemo(() => navigation.filter(item => !item.adminOnly || me?.role === "admin"), [me?.role]);
+  const visibleNavigation = useMemo(() => navigation.filter(item => me && canUseModule(me.modulePermissions, item.module)), [me]);
   const title = pageTitles[pathname] || { ar: "AssetLens AI", en: "Workspace" };
   const initials = (me?.name || me?.email || "AL").split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join("").toUpperCase();
+  const currentModule = navigation.find(item => isActive(pathname, item.href))?.module;
+  const deniedCurrentRoute = Boolean(me && currentModule && !canUseModule(me.modulePermissions, currentModule));
 
-  if (pathname === "/login") return <>{children}</>;
+  useEffect(() => {
+    if (!deniedCurrentRoute) return;
+    const firstAllowed = visibleNavigation[0]?.href;
+    if (firstAllowed && firstAllowed !== pathname) router.replace(firstAllowed);
+  }, [deniedCurrentRoute, pathname, router, visibleNavigation]);
+
+  if (pathname === "/login" || pathname === "/scan") return <>{children}</>;
+
+  if (deniedCurrentRoute) {
+    return <div className="al-navigation-loader is-static" role="status"><div><Image src="/assetlens-logo.png" alt="" width={170} height={55} /><span>جاري فتح أول صفحة مسموحة…</span><i /></div></div>;
+  }
 
   async function logout() {
     await signOut();
@@ -171,11 +194,23 @@ export default function AppShell({ children }: { children: ReactNode }) {
     router.replace("/login");
   }
 
+  async function submitPassword() {
+    setPasswordMessage("");
+    if (newPassword !== confirmPassword) { setPasswordMessage("كلمتا المرور غير متطابقتين."); return; }
+    setPasswordBusy(true);
+    try {
+      await changePassword(newPassword);
+      setPasswordMessage("تم تغيير كلمة المرور بنجاح.");
+      setNewPassword(""); setConfirmPassword("");
+    } catch (reason) { setPasswordMessage(reason instanceof Error ? reason.message : "تعذر تغيير كلمة المرور."); }
+    finally { setPasswordBusy(false); }
+  }
+
   function warmNavigation(href: string) {
     router.prefetch(href);
     if (href === "/") void prefetchApi("/api/dashboard", 20_000);
     else if (["/organization", "/locations", "/transfers"].includes(href)) void prefetchApi("/api/config?scope=structure", 5 * 60_000);
-    else if (href === "/assets") void prefetchApi("/api/assets?view=list&page=1&pageSize=50", 20_000);
+    else if (href === "/reports") void prefetchApi("/api/reports", 30_000);
     else if (href === "/capture") void prefetchApi("/api/config?scope=capture", 5 * 60_000);
   }
 
@@ -209,12 +244,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
         <div className="al-sidebar-foot">
-          <div className="al-user-summary"><span>{initials || "AL"}</span><div><strong>{me?.name || "AssetLens User"}</strong><small>{me?.role === "admin" ? "Administrator" : "Surveyor"}</small></div></div>
+          <div className="al-user-summary"><span>{initials || "AL"}</span><div><strong>{me?.name || "AssetLens User"}</strong><small>{me ? roleLabels[me.role] : "User"}</small></div></div>
           <button className="al-collapse" onClick={toggleCollapsed} aria-label={collapsed ? "توسيع القائمة" : "تصغير القائمة"}><Icon name="chevron" /><span>{collapsed ? "Expand" : "Collapse menu"}</span></button>
         </div>
       </aside>
       <div className="al-stage">
         <div className={`al-route-progress ${navigatingTo ? "is-active" : ""}`} aria-hidden="true"><span /></div>
+        {navigatingTo && <div className="al-navigation-loader" role="status" aria-live="polite"><div><Image src="/assetlens-logo.png" alt="" width={170} height={55} /><span>{online ? "جاري فتح الصفحة…" : "جاري فتح النسخة المحفوظة…"}</span><i /></div></div>}
         <header className="al-topbar">
           <div className="al-topbar-title">
             <button className="al-menu-button" onClick={() => setDrawerOpen(true)} aria-expanded={drawerOpen} aria-controls="assetlens-navigation" aria-label="فتح القائمة"><Icon name="menu" /></button>
@@ -222,18 +258,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </div>
           <div className="al-topbar-actions">
             <span className={`al-network ${online ? "online" : "offline"}`}><i /><span>{online ? "متصل" : "بدون إنترنت"}</span></span>
-            <Link className="al-quick-capture" href="/capture" onPointerEnter={() => warmNavigation("/capture")} onClick={() => beginNavigation("/capture")}><Icon name="capture" /><span>التقاط أصل</span></Link>
+            {me && canUseModule(me.modulePermissions, "capture", "create") && <Link className="al-quick-capture" href="/capture" onPointerEnter={() => warmNavigation("/capture")} onClick={() => beginNavigation("/capture")}><Icon name="capture" /><span>التقاط أصل</span></Link>}
             <div className="al-profile-menu" ref={profileRef}>
               <button onClick={() => setProfileOpen(value => !value)} aria-expanded={profileOpen} aria-label="خيارات الحساب"><span>{initials || "AL"}</span><div><strong>{me?.name || "AssetLens User"}</strong><small>{me?.email || "جاري التحقق…"}</small></div></button>
-              {profileOpen && <div className="al-profile-popover"><div><strong>{me?.name || "AssetLens User"}</strong><small>{me?.email || ""}</small></div><button onClick={() => void logout()}><Icon name="logout" /> تسجيل الخروج</button></div>}
+              {profileOpen && <div className="al-profile-popover"><div><strong>{me?.name || "AssetLens User"}</strong><small>{me?.email || ""}</small></div><button onClick={() => { setProfileOpen(false); setPasswordOpen(true); setPasswordMessage(""); }}>🔐 تغيير كلمة المرور</button><button onClick={() => void logout()}><Icon name="logout" /> تسجيل الخروج</button></div>}
             </div>
           </div>
         </header>
         <main className="al-content">{children}</main>
         <nav className="al-mobile-nav" aria-label="التنقل السريع">
-          {visibleNavigation.filter(item => ["/", "/capture", "/assets", "/locations", "/reports"].includes(item.href)).map(item => <Link key={item.href} href={item.href} className={isActive(pathname, item.href) ? "active" : ""} aria-current={isActive(pathname, item.href) ? "page" : undefined} onTouchStart={() => warmNavigation(item.href)} onClick={() => beginNavigation(item.href)}><Icon name={item.icon} /><span>{item.label === "Capture & Analyze" ? "Capture" : item.label.split(" ")[0]}</span></Link>)}
+          {visibleNavigation.filter(item => ["/", "/capture", "/locations", "/reports"].includes(item.href)).map(item => <Link key={item.href} href={item.href} className={isActive(pathname, item.href) ? "active" : ""} aria-current={isActive(pathname, item.href) ? "page" : undefined} onTouchStart={() => warmNavigation(item.href)} onClick={() => beginNavigation(item.href)}><Icon name={item.icon} /><span>{item.label === "Capture & Analyze" ? "Capture" : item.label.split(" ")[0]}</span></Link>)}
         </nav>
       </div>
+      {passwordOpen && <div className="al-dialog-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !passwordBusy) setPasswordOpen(false); }}><section className="al-dialog" role="dialog" aria-modal="true" aria-labelledby="password-dialog-title"><span className="al-dialog-icon">🔐</span><h3 id="password-dialog-title">تغيير كلمة المرور</h3><p>استخدم كلمة مرور قوية من 10 أحرف على الأقل.</p><label><span>كلمة المرور الجديدة</span><input className="ltr-input" type="password" autoComplete="new-password" value={newPassword} onChange={event => setNewPassword(event.target.value)} /></label><label><span>تأكيد كلمة المرور</span><input className="ltr-input" type="password" autoComplete="new-password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} /></label>{passwordMessage && <p role="status">{passwordMessage}</p>}<div><button className="al-secondary-button" disabled={passwordBusy} onClick={() => setPasswordOpen(false)}>إغلاق</button><button className="al-primary-button" disabled={passwordBusy || newPassword.length < 10} onClick={() => void submitPassword()}>{passwordBusy ? "جاري الحفظ…" : "حفظ كلمة المرور"}</button></div></section></div>}
     </div>
   );
 }

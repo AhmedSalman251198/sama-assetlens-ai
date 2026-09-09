@@ -1,10 +1,13 @@
 import { analyzeEncodedImages, arrayBufferToBase64 } from "./analyze-images";
+import type { RequestedAnalysisField } from "./analyze-images";
 import { downloadAssetImage, supabaseRest } from "./supabase";
 import type { AnalysisField } from "./analyze-images";
 
 type JobRow = { id: string; asset_id: string; created_by: string; status: "queued" | "processing" | "completed" | "failed"; started_at?: string | null };
 type ImageRow = { storage_path: string; mime_type: string; sort_order: number };
 type AssetQualityRow = { id: string; asset_no: string; project_id: string; fields: AnalysisField[] };
+type AssetConfigRow = { survey_config_id: string | null };
+type ConfiguredFieldRow = { field_key: string; label_en: string; label_ar: string; unit?: string; asset_types?: string[] };
 
 function serialValue(fields: AnalysisField[]) {
   const serial = fields.find(field => {
@@ -38,6 +41,20 @@ async function patchAsset(token: string, id: string, body: Record<string, unknow
   await supabaseRest(`assets?id=eq.${encodeURIComponent(id)}`, token, {
     method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(body),
   });
+}
+
+async function configuredAnalysisFields(token: string, assetId: string): Promise<RequestedAnalysisField[]> {
+  const assets = await supabaseRest<AssetConfigRow[]>(`assets?select=survey_config_id&id=eq.${encodeURIComponent(assetId)}&limit=1`, token);
+  const configId = assets[0]?.survey_config_id;
+  if (!configId) return [];
+  try {
+    const fields = await supabaseRest<ConfiguredFieldRow[]>(`custom_fields?select=field_key,label_en,label_ar,unit,asset_types&config_id=eq.${encodeURIComponent(configId)}&enabled=eq.true&ai_extract=eq.true&order=sort_order&limit=40`, token);
+    return fields.map(field => ({ key: field.field_key, label: field.label_en || field.label_ar || field.field_key, unit: field.unit || "", assetTypes: field.asset_types || [] }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/schema cache|column.*(ai_extract|unit|asset_types)/i.test(message)) return [];
+    throw error;
+  }
 }
 
 export async function recoverStaleProcessingJobs(token: string, olderThanMs = 120_000) {
@@ -88,7 +105,8 @@ export async function processNextAnalysisJob(token: string, sessionGeminiKey = "
       data: arrayBufferToBase64(await downloadAssetImage(image.storage_path, token)),
     })));
 
-    const result = await analyzeEncodedImages(encodedImages, sessionGeminiKey);
+    const requestedFields = await configuredAnalysisFields(token, job.asset_id);
+    const result = await analyzeEncodedImages(encodedImages, sessionGeminiKey, requestedFields);
     const completedAt = new Date().toISOString();
     const duplicate = await findDuplicateWarning(token, job.asset_id, result.fields);
     const warnings = Array.from(new Set([...result.warnings, ...(duplicate ? [duplicate] : [])]));

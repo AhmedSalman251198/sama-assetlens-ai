@@ -1,5 +1,6 @@
 import { drainAnalysisQueue } from "../../lib/server/asset-queue";
 import { requestToken, supabaseRest, verifyAuthUser } from "../../lib/server/supabase";
+import { hasModuleAccess } from "../../lib/server/module-access";
 import { after } from "next/server";
 
 export const runtime = "nodejs";
@@ -11,6 +12,7 @@ export async function POST(request: Request) {
   try {
     const token = requestToken(request); const user = await verifyAuthUser(token);
     if (!user) return Response.json({ error: "Authentication required." }, { status: 401 });
+    if (!await hasModuleAccess(token, user.id, "capture", "create")) return Response.json({ error: "Capture and analysis permission is required." }, { status: 403 });
     const body = await request.json().catch(() => ({})) as { action?: string; jobId?: string };
     if (body.action === "retry") {
       const jobId = typeof body.jobId === "string" ? body.jobId.trim() : "";

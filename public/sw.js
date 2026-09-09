@@ -1,8 +1,9 @@
-const VERSION = new URL(self.location.href).searchParams.get("v") || "14.0.0";
+const VERSION = new URL(self.location.href).searchParams.get("v") || "16.3.0";
 const CACHE = `assetlens-shell-${VERSION}`;
 const PRECACHE = [
   "/",
   "/capture",
+  "/scan",
   "/manifest.webmanifest",
   "/favicon.svg",
   "/assetlens-logo.png",

@@ -26,6 +26,31 @@ export const metadata: Metadata = {
 
 export const viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#092d3c" };
 
+const developmentCacheReset = `
+(() => {
+  if (!("serviceWorker" in navigator) || !("caches" in window)) return;
+  const marker = "assetlens_dev_cache_reset_16_3_0";
+  Promise.all([navigator.serviceWorker.getRegistrations(), caches.keys()]).then(async ([registrations, keys]) => {
+    const assetlensWorkers = registrations.filter(registration => {
+      const worker = registration.active || registration.waiting || registration.installing;
+      return worker && new URL(worker.scriptURL).pathname === "/sw.js";
+    });
+    const assetlensCaches = keys.filter(key => key.startsWith("assetlens-"));
+    if (!assetlensWorkers.length && !assetlensCaches.length) return;
+    await Promise.all([
+      ...assetlensWorkers.map(registration => registration.unregister()),
+      ...assetlensCaches.map(key => caches.delete(key)),
+    ]);
+    if (!sessionStorage.getItem(marker)) {
+      sessionStorage.setItem(marker, "true");
+      location.reload();
+    }
+  }).catch(() => undefined);
+})();`;
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="ar" dir="rtl"><body><AppShell>{children}</AppShell></body></html>;
+  return <html lang="ar" dir="rtl" data-scroll-behavior="smooth"><body>
+    {process.env.NODE_ENV !== "production" && <script dangerouslySetInnerHTML={{ __html: developmentCacheReset }} />}
+    <AppShell>{children}</AppShell>
+  </body></html>;
 }

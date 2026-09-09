@@ -48,11 +48,19 @@ export async function signIn(email: string, password: string) {
   return saveSession(await authRequest("token?grant_type=password", { email: email.trim().toLowerCase(), password }));
 }
 
-export async function signUp(email: string, password: string, name: string) {
-  const redirectTo = encodeURIComponent(`${window.location.origin}/login`);
-  const payload = await authRequest(`signup?redirect_to=${redirectTo}`, { email: email.trim().toLowerCase(), password, data: { name: name.trim() } });
-  if (payload.access_token) saveSession(payload);
-  return payload;
+export async function changePassword(password: string) {
+  const clean = password.trim();
+  if (clean.length < 10) throw new Error("كلمة المرور يجب ألا تقل عن 10 أحرف.");
+  const token = await getAccessToken();
+  if (!token) throw new Error("انتهت جلسة الدخول. سجل الدخول مرة أخرى.");
+  const { url, publishableKey } = await config();
+  const response = await fetch(`${url}/auth/v1/user`, {
+    method: "PUT",
+    headers: { apikey: publishableKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ password: clean }),
+  });
+  const payload = await response.json().catch(() => ({})) as { error?: string; error_description?: string; msg?: string };
+  if (!response.ok) throw new Error(payload.error_description || payload.msg || payload.error || "تعذر تغيير كلمة المرور.");
 }
 
 export async function getAccessToken() {

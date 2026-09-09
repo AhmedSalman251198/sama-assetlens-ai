@@ -1,5 +1,6 @@
 import { analyzeEncodedImages, arrayBufferToBase64 } from "../../lib/server/analyze-images";
 import { requestToken, supabaseRest, verifyAuthUser } from "../../lib/server/supabase";
+import { hasModuleAccess } from "../../lib/server/module-access";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -14,6 +15,7 @@ export async function POST(request: Request) {
     const token = requestToken(request);
     const user = await verifyAuthUser(token);
     if (!user) return Response.json({ error: "Authentication required." }, { status: 401 });
+    if (!await hasModuleAccess(token, user.id, "capture", "create")) return Response.json({ error: "Capture and analysis permission is required." }, { status: 403 });
     const profiles = await supabaseRest<Array<{ id: string }>>(`app_users?select=id&user_id=eq.${encodeURIComponent(user.id)}&active=eq.true&limit=1`, token);
     if (!profiles[0]) return Response.json({ error: "This account is disabled or unauthorized." }, { status: 403 });
     const form = await request.formData();
