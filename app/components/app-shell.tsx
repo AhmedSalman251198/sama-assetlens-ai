@@ -37,7 +37,7 @@ const pageTitles: Record<string, { ar: string; en: string }> = {
   "/admin": { ar: "إدارة النظام", en: "Administration" },
 };
 
-const SERVICE_WORKER_VERSION = "21.0.0";
+const SERVICE_WORKER_VERSION = "21.0.1";
 const roleLabels: Record<UserRole, string> = { admin: "Administrator", project_manager: "Project Manager", reviewer: "Reviewer", surveyor: "Surveyor", viewer: "Viewer" };
 
 function Icon({ name }: { name: IconName }) {
@@ -79,6 +79,36 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState("");
   const profileRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const root = contentRef.current;
+    if (!root) return;
+    const selector = '[role="alert"], [data-scroll-alert="true"]';
+    const seen = new WeakSet<Element>();
+    root.querySelectorAll(selector).forEach(element => seen.add(element));
+    const reveal = (element: Element) => {
+      if (seen.has(element) || !(element instanceof HTMLElement) || !element.getClientRects().length) return;
+      seen.add(element);
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      element.scrollIntoView({ block: "start", behavior: reduced ? "auto" : "smooth" });
+      if (!element.hasAttribute("tabindex")) element.setAttribute("tabindex", "-1");
+      element.focus({ preventScroll: true });
+    };
+    const observer = new MutationObserver(records => {
+      for (const record of records) {
+        const target = record.target instanceof Element ? record.target.closest(selector) : null;
+        if (target) reveal(target);
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (node.matches(selector)) reveal(node);
+          node.querySelectorAll(selector).forEach(reveal);
+        }
+      }
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [pathname]);
 
   useEffect(() => {
     const resetAccountState = () => { invalidateApiCache(); setMe(null); };
@@ -305,7 +335,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
         </header>
-        <main className="al-content">{children}</main>
+        <main className="al-content" ref={contentRef}>{children}</main>
         <nav className="al-mobile-nav" aria-label={language === "ar" ? "التنقل السريع" : "Quick navigation"}>
           {visibleNavigation.filter(item => ["/", "/capture", "/locations", "/reports"].includes(item.href)).map(item => <Link key={item.href} href={item.href} className={isActive(pathname, item.href) ? "active" : ""} aria-current={isActive(pathname, item.href) ? "page" : undefined} onTouchStart={() => warmNavigation(item.href)} onClick={() => beginNavigation(item.href)}><Icon name={item.icon} /><span>{language === "ar" ? item.labelAr.split(" ")[0] : item.label === "Capture & Analyze" ? "Capture" : item.label.split(" ")[0]}</span></Link>)}
         </nav>

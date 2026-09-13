@@ -46,9 +46,12 @@ export async function GET(request: Request) {
     if (!user) return Response.json({ error: "Authentication required." }, { status: 401 });
     const access = await moduleAccessFor(token, user.id);
     if (!access || !canUseModule(access.permissions, "intelligence")) return Response.json({ error: "Asset Intelligence access is not allowed for this account." }, { status: 403 });
-    const requestedProject = uuid(new URL(request.url).searchParams.get("project"));
+    const rawProject = new URL(request.url).searchParams.get("project");
+    const requestedProject = uuid(rawProject);
+    if (rawProject && !requestedProject) return Response.json({ error: "Choose a valid project." }, { status: 400 });
     const projects = await supabaseRest<Array<{ id: string; name: string }>>("projects?select=id,name&active=eq.true&order=name", token);
-    const projectId = requestedProject && projects.some(project => project.id === requestedProject) ? requestedProject : projects[0]?.id || "";
+    if (requestedProject && !projects.some(project => project.id === requestedProject)) return Response.json({ error: "Choose an accessible project." }, { status: 403 });
+    const projectId = requestedProject || projects[0]?.id || "";
     if (!projectId) return Response.json({ projects: [], projectId: "", assets: [], dependencies: [], scenarios: [], twin: [] });
     const [assets, dependencyRows, scenarios] = await Promise.all([
       loadAssets(token, projectId),
@@ -93,8 +96,8 @@ export async function POST(request: Request) {
       if (!canUseModule(access.permissions, "intelligence", "create") && !canUseModule(access.permissions, "intelligence", "edit")) return Response.json({ error: "Dependency editing permission is required." }, { status: 403 });
       const upstream = uuid(body.upstreamAssetId); const downstream = uuid(body.downstreamAssetId);
       if (!allowedAssetIds.has(upstream) || !allowedAssetIds.has(downstream) || upstream === downstream) return Response.json({ error: "Choose two different assets in this project." }, { status: 400 });
-      const dependencyType = ["supplies","controls","protects","serves","feeds","depends_on","other"].includes(text(body.dependencyType, 30)) ? text(body.dependencyType, 30) : "supplies";
-      const impact = ["low","medium","high","critical"].includes(text(body.impact, 20)) ? text(body.impact, 20) : "medium";
+      const dependencyType = ["unverified","supplies","controls","protects","serves","feeds","depends_on","other"].includes(text(body.dependencyType, 30)) ? text(body.dependencyType, 30) : "unverified";
+      const impact = ["unassessed","low","medium","high","critical"].includes(text(body.impact, 20)) ? text(body.impact, 20) : "unassessed";
       const rows = await supabaseRest<DependencyRow[]>("asset_dependencies?on_conflict=upstream_asset_id,downstream_asset_id", token, { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify({ project_id: projectId, upstream_asset_id: upstream, downstream_asset_id: downstream, dependency_type: dependencyType, impact, note: text(body.note, 1000), created_by: user.id }) });
       return Response.json({ dependency: mapDependencies(rows)[0] }, { status: 201 });
     }

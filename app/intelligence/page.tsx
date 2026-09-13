@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, invalidateApiCache } from "../lib/api-client";
 import { assetRiskScore, type AssetDependency, type IntelligenceAsset } from "../lib/asset-intelligence";
 import { getAccessToken } from "../lib/supabase-auth";
@@ -19,12 +19,20 @@ export default function AssetIntelligencePage() {
   const [upstream, setUpstream] = useState(""); const [downstream, setDownstream] = useState(""); const [dependencyType, setDependencyType] = useState("supplies"); const [impact, setImpact] = useState("high"); const [impactRows, setImpactRows] = useState<Array<{ assetId: string; depth: number; impact: string; via: string }>>([]);
   const [budget, setBudget] = useState("500000"); const [horizon, setHorizon] = useState("5"); const [scenarioName, setScenarioName] = useState(""); const [simulation, setSimulation] = useState<Simulation | null>(null);
   const [question, setQuestion] = useState(""); const [answer, setAnswer] = useState<Answer | null>(null);
+  const [projectLoading, setProjectLoading] = useState(false);
+  const loadRequestRef = useRef(0);
 
   async function load(nextProject = "") {
+    const requestId = ++loadRequestRef.current;
+    if (nextProject) setProjectId(nextProject);
+    setProjectLoading(true);
     try {
       const payload = await apiGet<IntelligencePayload>(`/api/intelligence${nextProject ? `?project=${encodeURIComponent(nextProject)}` : ""}`, { force: true, timeoutMs: 120_000 });
+      if (requestId !== loadRequestRef.current) return;
+      if (nextProject && payload.projectId !== nextProject) throw new Error(l("تعذر تأكيد المشروع المحدد.", "The selected project could not be confirmed."));
       setData(payload); setProjectId(payload.projectId); setError(""); setImpactRows([]); setSimulation(null); setAnswer(null);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : l("تعذر تحميل ذكاء الأصول.", "Asset Intelligence could not be loaded.")); }
+    } catch (reason) { if (requestId === loadRequestRef.current) setError(reason instanceof Error ? reason.message : l("تعذر تحميل ذكاء الأصول.", "Asset Intelligence could not be loaded.")); }
+    finally { if (requestId === loadRequestRef.current) setProjectLoading(false); }
   }
   useEffect(() => {
     const timer = window.setTimeout(() => { void load(); }, 0);
@@ -32,6 +40,7 @@ export default function AssetIntelligencePage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function action<T>(body: Record<string, unknown>) {
+    if (projectLoading || !data || data.projectId !== projectId) throw new Error(l("انتظر حتى يكتمل تحميل المشروع المحدد.", "Wait for the selected project to finish loading."));
     const token = await getAccessToken(); if (!token) { window.location.replace("/login"); throw new Error("Authentication required."); }
     const response = await fetch("/api/intelligence", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ ...body, projectId }) });
     const payload = await response.json().catch(() => ({})) as T & { error?: string };
@@ -60,12 +69,21 @@ export default function AssetIntelligencePage() {
 
   const assetById = useMemo(() => new Map((data?.assets || []).map(asset => [asset.id, asset])), [data]);
   const highRisk = (data?.assets || []).filter(asset => assetRiskScore(asset) >= 16).length;
+  const tabs = ([['twin',l("التوأم الرقمي الخفيف", "Digital Twin Lite")],['graph',l("اعتماد الأصول", "Dependency Graph")],['capital',l("تخطيط رأس المال", "Capital Planning")]] as const);
+  function moveTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? (language === "ar" ? -1 : 1) : (language === "ar" ? 1 : -1);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + direction + tabs.length) % tabs.length;
+    setTab(tabs[next][0]);
+    document.getElementById(`intel-tab-${tabs[next][0]}`)?.focus();
+  }
   if (!data) return <main className="al-page intelligence-page"><div className="route-brand-loader"><span>{error || l("جاري بناء نموذج ذكاء الأصول…", "Building the Asset Intelligence model…")}</span><i /></div></main>;
   return <main className="al-page intelligence-page">
-    <header className="al-page-head"><div><span className="al-page-kicker">ASSET INTELLIGENCE</span><h2>{l("مركز القرار للأصول", "Asset decision center")}</h2><p>{l("اربط تأثير الأصول، اختبر ميزانيات الاستبدال، واسأل سجل المشروع من مصدر بيانات واحد.", "Map asset impact, test replacement budgets and query the project register from one governed source.")}</p></div><label>{l("المشروع", "Project")}<select value={projectId} onChange={event => void load(event.target.value)}>{data.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label></header>
+    <header className="al-page-head"><div><span className="al-page-kicker">ASSET INTELLIGENCE</span><h2>{l("مركز القرار للأصول", "Asset decision center")}</h2><p>{l("اربط تأثير الأصول، اختبر ميزانيات الاستبدال، واسأل سجل المشروع من مصدر بيانات واحد.", "Map asset impact, test replacement budgets and query the project register from one governed source.")}</p></div><label>{l("المشروع", "Project")}<select value={projectId} disabled={projectLoading || busy} aria-busy={projectLoading} onChange={event => void load(event.target.value)}>{data.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label></header>
     {error && <div className="al-alert" role="alert">{error}</div>}{notice && <div className="al-alert success">{notice}</div>}
     <section className="intel-kpis"><article><span>{l("الأصول في النموذج", "Modeled assets")}</span><strong>{data.assets.length}</strong></article><article><span>{l("علاقات الاعتماد", "Dependencies")}</span><strong>{data.dependencies.length}</strong></article><article><span>{l("مخاطر عالية", "High risk")}</span><strong>{highRisk}</strong></article><article><span>{l("سيناريوهات محفوظة", "Saved scenarios")}</span><strong>{data.scenarios.length}</strong></article></section>
-    <nav className="intel-tabs">{([['twin',l("التوأم الرقمي الخفيف", "Digital Twin Lite")],['graph',l("اعتماد الأصول", "Dependency Graph")],['capital',l("تخطيط رأس المال", "Capital Planning")]] as const).map(item => <button key={item[0]} className={tab === item[0] ? "active" : ""} onClick={() => setTab(item[0])}>{item[1]}</button>)}</nav>
+    <nav className="intel-tabs" role="tablist" aria-label={l("أقسام ذكاء الأصول", "Asset Intelligence sections")}>{tabs.map((item, index) => <button type="button" role="tab" id={`intel-tab-${item[0]}`} aria-controls={`intel-panel-${item[0]}`} aria-selected={tab === item[0]} tabIndex={tab === item[0] ? 0 : -1} key={item[0]} className={tab === item[0] ? "active" : ""} onKeyDown={event => moveTab(event, index)} onClick={() => setTab(item[0])}>{item[1]}</button>)}</nav>
 
     {tab === "twin" && <section className="intel-panel"><header><div><h3>{l("النموذج التشغيلي للموقع", "Operational site model")}</h3><p>{l("تم إنشاؤه من المبنى والموقع والأصول الحالية دون تكلفة نموذج BIM.", "Generated from current building, location and asset records without a costly BIM model.")}</p></div></header><div className="twin-grid">{data.twin.map(building => <article key={building.building}><header><span>BUILDING</span><h4>{building.building}</h4><b>{building.assetCount} {l("أصل", "assets")}</b></header>{building.locations.slice(0, 12).map(location => <details key={location.location}><summary><span>{location.location}</span><b>{location.assetCount}</b><em>{l("مخاطر", "risk")} {location.riskScore}</em></summary>{location.assets.slice(0, 20).map(asset => <p key={asset.id}><strong>{asset.assetNo}</strong><span>{asset.assetType}</span><i data-risk={assetRiskScore(asset) >= 16 ? "high" : "normal"}>{assetRiskScore(asset)}</i></p>)}</details>)}</article>)}</div></section>}
 

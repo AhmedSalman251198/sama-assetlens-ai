@@ -3,7 +3,7 @@ import { requestToken, supabaseRest, supabaseRestAll, verifyAuthUser } from "../
 import { moduleAccessFor, hasModuleAccess } from "../../lib/server/module-access";
 import { canUseModule } from "../../lib/module-permissions";
 import type { AnalysisField } from "../../lib/server/analyze-images";
-import { importedOperationalStatus, importedRating, incompleteImportFields } from "../../lib/import-normalization";
+import { importedCurrency, importedIsoDate, importedMoney, importedOperationalStatus, importedRating, importedYears, incompleteImportFields } from "../../lib/import-normalization";
 
 export const runtime = "nodejs";
 
@@ -12,7 +12,7 @@ type AssetRow = {
   project_name: string; building_name: string; floor_name: string; zone_name: string; office_name: string; additional_locations: DynamicLocationValue[]; surveyor_email: string;
   source_file_names: string[]; asset_type: string; summary: string; fields: AnalysisField[]; warnings: string[];
   overall_confidence: number; condition_rating: number | null; condition_justification: string; criticality_rating: number | null; status: string; error: string | null; created_at: string;
-  category_id: string | null; operational_status: string; estimated_price: number | null; replacement_cost: number | null; price_currency: string; useful_life_years: number | null; remaining_life_years: number | null;
+  category_id: string | null; operational_status: string; estimated_price: number | null; replacement_cost: number | null; price_currency: string; useful_life_years: number | null; remaining_life_years: number | null; installation_date: string | null;
   asset_categories?: { label_ar: string; label_en: string } | null;
   latitude?: number | null; longitude?: number | null; gps_accuracy_m?: number | null; barcode?: string; captured_offline?: boolean; device_captured_at?: string | null;
 };
@@ -28,6 +28,7 @@ type ImportRow = {
   assetNo?: unknown; assetType?: unknown; manufacturer?: unknown; model?: unknown; serial?: unknown; summary?: unknown;
   building?: unknown; floor?: unknown; zone?: unknown; office?: unknown; customValues?: unknown; categoryId?: unknown;
   conditionRating?: unknown; conditionJustification?: unknown; criticalityRating?: unknown; operationalStatus?: unknown; sourceSheet?: unknown; sourceRow?: unknown;
+  estimatedPrice?: unknown; replacementCost?: unknown; priceCurrency?: unknown; usefulLifeYears?: unknown; remainingLifeYears?: unknown; installationDate?: unknown;
   extraFields?: unknown; duplicateInFile?: unknown;
 };
 type CategoryRow = { id: string; label_ar: string; label_en: string; active: boolean };
@@ -49,7 +50,7 @@ async function actor(token: string, userId: string) {
 }
 
 async function reportAssets(token: string, projectFilter: string) {
-  const baseFields = "id,asset_no,project_id,survey_config_id,created_by,project_name,building_name,floor_name,zone_name,office_name,additional_locations,surveyor_email,source_file_names,asset_type,summary,fields,warnings,overall_confidence,condition_rating,condition_justification,criticality_rating,status,error,created_at,category_id,operational_status,estimated_price,replacement_cost,price_currency,useful_life_years,remaining_life_years,asset_categories(label_ar,label_en)";
+  const baseFields = "id,asset_no,project_id,survey_config_id,created_by,project_name,building_name,floor_name,zone_name,office_name,additional_locations,surveyor_email,source_file_names,asset_type,summary,fields,warnings,overall_confidence,condition_rating,condition_justification,criticality_rating,status,error,created_at,category_id,operational_status,estimated_price,replacement_cost,price_currency,useful_life_years,remaining_life_years,installation_date,asset_categories(label_ar,label_en)";
   try {
     return await supabaseRestAll<AssetRow>(`assets?select=${baseFields},latitude,longitude,gps_accuracy_m,barcode,captured_offline,device_captured_at&${projectFilter}&order=created_at.desc`, token);
   } catch (error) {
@@ -195,6 +196,14 @@ export async function POST(request: Request) {
       const rawCondition = importedRating(row.conditionRating);
       const conditionRating = rawCondition !== null && rawCondition <= 2 && conditionJustification.length < 3 ? null : rawCondition;
       const criticalityRating = importedRating(row.criticalityRating);
+      const priceCurrency = importedCurrency(row.priceCurrency);
+      const sourceEstimatedPrice = importedMoney(row.estimatedPrice);
+      const sourceReplacementCost = importedMoney(row.replacementCost);
+      const estimatedPrice = priceCurrency ? sourceEstimatedPrice : null;
+      const replacementCost = priceCurrency ? sourceReplacementCost : null;
+      const usefulLifeYears = importedYears(row.usefulLifeYears);
+      const remainingLifeYears = importedYears(row.remainingLifeYears);
+      const installationDate = importedIsoDate(row.installationDate);
       const missing = incompleteImportFields({ ...row, categoryId, conditionRating, criticalityRating }, { building: project.require_building, floor: project.require_floor, zone: project.require_zone, office: project.require_office });
       const duplicateSerial = Boolean(serialKey && (knownSerials.has(serialKey) || batchSerials.has(serialKey) || row.duplicateInFile === true));
       if (serialKey) batchSerials.add(serialKey);
@@ -215,6 +224,12 @@ export async function POST(request: Request) {
       }).filter(Boolean);
       for (const level of importLocationLevels) if (level.required && !additionalLocations.some(item => item?.levelId === level.id)) missing.push(level.label_en || level.label_ar || level.level_key);
       if (rawCondition !== null && conditionRating === null) fields.push({ key: "sourceConditionRating", label: "Source condition rating (requires justification)", value: String(rawCondition), confidence: 1 });
+      if (row.estimatedPrice !== undefined && text(row.estimatedPrice)) fields.push({ key: "sourceEstimatedPrice", label: "Source estimated price", value: text(row.estimatedPrice), confidence: 1 });
+      if (row.replacementCost !== undefined && text(row.replacementCost)) fields.push({ key: "sourceReplacementCost", label: "Source replacement cost", value: text(row.replacementCost), confidence: 1 });
+      if (row.priceCurrency !== undefined && text(row.priceCurrency)) fields.push({ key: "sourcePriceCurrency", label: "Source price currency", value: text(row.priceCurrency), confidence: 1 });
+      if (row.usefulLifeYears !== undefined && text(row.usefulLifeYears)) fields.push({ key: "sourceUsefulLife", label: "Source useful life", value: text(row.usefulLifeYears), confidence: 1 });
+      if (row.remainingLifeYears !== undefined && text(row.remainingLifeYears)) fields.push({ key: "sourceRemainingLife", label: "Source remaining life", value: text(row.remainingLifeYears), confidence: 1 });
+      if (row.installationDate !== undefined && text(row.installationDate)) fields.push({ key: "sourceInstallationDate", label: "Source installation date", value: text(row.installationDate), confidence: 1 });
       const importFingerprint = createHash("sha256").update(JSON.stringify({
         projectId, sourceSheet, sourceRow, assetNo: text(row.assetNo), assetType, manufacturer, model, serial,
         building: text(row.building), floor: text(row.floor), zone: text(row.zone), office: text(row.office), extraFields,
@@ -223,8 +238,8 @@ export async function POST(request: Request) {
         project_id: projectId, survey_config_id: config.id, created_by: user.id, project_name: project.name,
         building_name: text(row.building), floor_name: text(row.floor), zone_name: text(row.zone), office_name: text(row.office), additional_locations: additionalLocations, surveyor_email: user.email,
         source_file_names: [text(body.fileName, 200) || "legacy-register.xlsx"], asset_type: assetType, summary: text(row.summary, 1000) || `Imported asset from ${sourceSheet} row ${sourceRow}`,
-        fields, warnings: ["Imported from spreadsheet — verify source data.", ...(missing.length ? [`Incomplete import — fill in: ${Array.from(new Set(missing)).join(", ")}`] : []), ...(duplicateSerial ? [`Duplicate serial detected for review: ${serial}`] : [])],
-        category_id: categoryId, operational_status: importedOperationalStatus(row.operationalStatus),
+        fields, warnings: ["Imported from spreadsheet — verify source data.", ...(missing.length ? [`Incomplete import — fill in: ${Array.from(new Set(missing)).join(", ")}`] : []), ...(duplicateSerial ? [`Duplicate serial detected for review: ${serial}`] : []), ...((sourceEstimatedPrice !== null || sourceReplacementCost !== null) && !priceCurrency ? ["Financial values require an explicit ISO currency before they can be used in calculations."] : []), ...(text(row.installationDate) && !installationDate ? ["Installation date was preserved as source data but not mapped because it is not YYYY-MM-DD."] : [])],
+        category_id: categoryId, operational_status: importedOperationalStatus(row.operationalStatus), estimated_price: estimatedPrice, replacement_cost: replacementCost, price_currency: priceCurrency || "AED", useful_life_years: usefulLifeYears, remaining_life_years: remainingLifeYears, installation_date: installationDate, estimate_source: estimatedPrice !== null || replacementCost !== null ? "spreadsheet import" : null, estimate_confidence: estimatedPrice !== null || replacementCost !== null ? 1 : null,
         raw_text: "", overall_confidence: 0, condition_rating: conditionRating, condition_justification: conditionJustification, criticality_rating: criticalityRating, status: "review", error: null, import_fingerprint: importFingerprint,
       });
       sourceByFingerprint.set(importFingerprint, row);

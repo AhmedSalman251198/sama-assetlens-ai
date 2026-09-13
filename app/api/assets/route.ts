@@ -754,20 +754,29 @@ export async function DELETE(request: Request) {
   try {
     const token = requestToken(request); const user = await verifyAuthUser(token);
     if (!user) return Response.json({ error: "Authentication required." }, { status: 401 });
-    const id = new URL(request.url).searchParams.get("id")?.trim() || "";
-    if (!id) return Response.json({ error: "Asset id is required." }, { status: 400 });
+    let body: { ids?: unknown } = {};
+    if ((request.headers.get("content-type") || "").includes("application/json")) body = await request.json().catch(() => ({}));
+    const queryId = new URL(request.url).searchParams.get("id")?.trim() || "";
+    const supplied = Array.isArray(body.ids) ? body.ids : queryId ? [queryId] : [];
+    const ids = Array.from(new Set(supplied.filter((value): value is string => typeof value === "string").map(value => value.trim())));
+    if (!ids.length) return Response.json({ error: "Choose at least one asset." }, { status: 400 });
+    if (ids.length > 50) return Response.json({ error: "Delete at most 50 assets in one batch." }, { status: 400 });
+    if (ids.some(id => !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))) return Response.json({ error: "One or more asset ids are invalid." }, { status: 400 });
     if (!await hasAnyModuleAccess(token, user.id, [{ module: "capture", action: "delete" }, { module: "reports", action: "delete" }])) return Response.json({ error: "Asset deletion permission is required." }, { status: 403 });
+    const idFilter = `in.(${ids.join(",")})`;
     const [profiles, assets] = await Promise.all([
       supabaseRest<Array<{ role: string }>>(`app_users?select=role&user_id=eq.${encodeURIComponent(user.id)}&active=eq.true&limit=1`, token),
-      supabaseRest<Array<{ created_by: string }>>(`assets?select=created_by&id=eq.${encodeURIComponent(id)}&limit=1`, token),
+      supabaseRest<Array<{ id: string; asset_no: string; created_by: string }>>(`assets?select=id,asset_no,created_by&id=${encodeURIComponent(idFilter)}`, token),
     ]);
     if (!profiles[0]) return Response.json({ error: "This account is disabled or unauthorized." }, { status: 403 });
-    if (!assets[0]) return Response.json({ error: "Asset was not found or is not accessible." }, { status: 404 });
-    if (!canDeleteAsset(profiles[0].role, assets[0].created_by, user.id)) return Response.json({ error: "Your role cannot delete this asset." }, { status: 403 });
-    const images = await supabaseRest<Array<{ storage_path: string }>>(`asset_images?select=storage_path&asset_id=eq.${encodeURIComponent(id)}`, token);
-    await supabaseRest(`assets?id=eq.${encodeURIComponent(id)}`, token, { method: "DELETE", headers: { Prefer: "return=minimal" } });
-    await deleteAssetImages(images.map(image => image.storage_path), token).catch(error => console.error("Asset image cleanup failed after the database record was deleted.", error));
-    return Response.json(await queueWorkspace(token, user.id));
+    if (assets.length !== ids.length) return Response.json({ error: "At least one asset was not found or is not accessible; nothing was deleted." }, { status: 404 });
+    const denied = assets.find(asset => !canDeleteAsset(profiles[0].role, asset.created_by, user.id));
+    if (denied) return Response.json({ error: `Your role cannot delete asset ${denied.asset_no || denied.id}; nothing was deleted.` }, { status: 403 });
+    const images = await supabaseRest<Array<{ storage_path: string }>>(`asset_images?select=storage_path&asset_id=${encodeURIComponent(idFilter)}`, token);
+    await supabaseRest(`assets?id=${encodeURIComponent(idFilter)}`, token, { method: "DELETE", headers: { Prefer: "return=minimal" } });
+    let cleanupWarning = "";
+    await deleteAssetImages(images.map(image => image.storage_path), token).catch(error => { cleanupWarning = "Asset records were deleted, but some stored images need cleanup."; console.error(cleanupWarning, error); });
+    return Response.json({ deleted: assets.map(asset => ({ id: asset.id, assetNo: asset.asset_no })), count: assets.length, cleanupWarning });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "The asset could not be deleted." }, { status: 500 });
   }

@@ -62,7 +62,7 @@ test("asset register is merged into reports and legacy deep links stay safe", as
   assert.match(assetsPage, /redirect\("\/reports"\)/);
   assert.match(assetApi, /supabaseRestWithCount/);
   assert.match(assetApi, /view === "list" \|\| view === "transfer"/);
-  assert.match(reports, /\[row\.id, row\.assetNo/);
+  assert.match(reports, /\[\s*row\.id,\s*row\.assetNo/);
   assert.match(reports, /setDetail\(row\)/);
   assert.match(reports, /\/transfers\?asset=/);
   assert.match(locations, /view: "manage"/);
@@ -145,7 +145,9 @@ test("PWA shell includes offline capture and avoids caching login or APIs", asyn
   assert.match(worker, /url\.searchParams\.has\("_rsc"\)/);
   assert.match(worker, /Next-Router-State-Tree/);
   assert.match(shell, /updateViaCache: "none"/);
-  assert.match(shell, /SERVICE_WORKER_VERSION = "21\.0\.0"/);
+  const serviceWorkerVersion = shell.match(/SERVICE_WORKER_VERSION = "(\d+\.\d+\.\d+)"/)?.[1];
+  assert.ok(serviceWorkerVersion);
+  assert.ok(worker.includes(`|| "${serviceWorkerVersion}"`));
   assert.match(shell, /process\.env\.NODE_ENV !== "production"/);
   assert.match(layout, /data-scroll-behavior="smooth"/);
   assert.match(layout, /assetlens_dev_cache_reset_19_0_0/);
@@ -163,9 +165,9 @@ test("asset QR embeds an offline snapshot and refreshes from Supabase when onlin
   assert.match(reports, /\/api\/assets\/\$\{encodeURIComponent\(row\.id\)\}\/qr/);
   assert.match(reports, /force: true/);
   assert.match(reports, /buildAssetQrPayload\(snapshot\.source\)/);
-  assert.match(reports, /createAssetQrValue\(window\.location\.origin, payload\)/);
+  assert.match(reports, /createAssetQrValue\(\s*window\.location\.origin,\s*payload,?\s*\)/);
   assert.match(reports, /QRCode\.toDataURL/);
-  assert.match(reports, /width: 360, margin: 2/);
+  assert.match(reports, /width:\s*360,\s*margin:\s*2/);
   assert.match(reports, /width:132px;height:132px/);
   assert.doesNotMatch(reports, /api\.qrserver\.com/);
   assert.match(endpoint, /operational_status/);
@@ -477,4 +479,48 @@ test("R18 delivers smart imports, richer AI reports and accessible dark surfaces
   assert.match(aiPage, /action-plan-section/);
   assert.match(css, /html\[data-theme="dark"\][\s\S]*--ux-muted:#a8bdc5/);
   assert.match(css, /prefers-contrast:more/);
+});
+
+test("the closed floating assistant cannot intercept clicks outside visible controls", async () => {
+  const assistant = await readText("../app/components/assetlens-assistant.tsx");
+  const css = await readText("../app/assistant.css");
+  assert.match(css, /\.assistant-dock\{[^}]*pointer-events:none/);
+  assert.match(css, /\.assistant-dock>\.assistant-trigger,\.assistant-dock>\.assistant-welcome\{pointer-events:auto\}/);
+  assert.match(css, /\.assistant-panel\{[^}]*pointer-events:none/);
+  assert.match(css, /\.assistant-dock\.is-open \.assistant-panel\{[^}]*pointer-events:auto/);
+  assert.match(css, /\.assistant-trigger-orbit\{[^}]*pointer-events:none/);
+  assert.match(assistant, /inert=\{!open\}/);
+});
+
+test("Asset Intelligence keeps the latest project choice and exposes keyboard-operable tabs", async () => {
+  const page = await readText("../app/intelligence/page.tsx");
+  const route = await readText("../app/api/intelligence/route.ts");
+  assert.match(page, /loadRequestRef/);
+  assert.match(page, /requestId !== loadRequestRef\.current/);
+  assert.match(page, /payload\.projectId !== nextProject/);
+  assert.match(page, /role="tablist"/);
+  assert.match(page, /aria-selected=\{tab === item\[0\]\}/);
+  assert.match(page, /ArrowRight/);
+  assert.match(route, /rawProject && !requestedProject/);
+  assert.match(route, /requestedProject && !projects\.some/);
+});
+
+test("important action feedback scrolls into view without reacting to ordinary background updates", async () => {
+  const shell = await readText("../app/components/app-shell.tsx");
+  assert.match(shell, /new MutationObserver/);
+  assert.match(shell, /\[role="alert"\], \[data-scroll-alert="true"\]/);
+  assert.match(shell, /prefers-reduced-motion: reduce/);
+  assert.match(shell, /scrollIntoView/);
+});
+
+test("AI reports expose an evidence-aware confidence map and keep Gemini server-side", async () => {
+  const route = await readText("../app/api/reports/ai/route.ts");
+  const page = await readText("../app/reports/ai/page.tsx");
+  assert.match(route, /confidenceEligible/);
+  assert.match(route, /raw_text/);
+  assert.match(route, /confidenceMap/);
+  assert.match(route, /process\.env\.GEMINI_API_KEY/);
+  assert.doesNotMatch(page, /x-gemini-api-key/);
+  assert.match(page, /AI Confidence Map/);
+  assert.match(page, /غير مقيّم لم تُمنح ثقة اصطناعية/);
 });

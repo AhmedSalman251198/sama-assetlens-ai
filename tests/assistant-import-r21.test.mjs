@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
-import { importedOperationalStatus, importedRating, incompleteImportFields } from "../app/lib/import-normalization.ts";
+import { importedCurrency, importedIsoDate, importedMoney, importedOperationalStatus, importedRating, importedYears, incompleteImportFields } from "../app/lib/import-normalization.ts";
 import { compareRepairAndReplacement } from "../app/lib/repair-decision.ts";
 import { canUseModule, defaultModulePermissions, normalizeModulePermissions } from "../app/lib/module-permissions.ts";
 import { assetRiskScore, simulateCapitalPlan } from "../app/lib/asset-intelligence.ts";
@@ -28,6 +28,21 @@ test("unknown and blank operational states remain unknown; imported missing rati
   assert.equal(importedRating("3"), 3);
   assert.equal(importedRating("Very Good"), null);
   assert.deepEqual(incompleteImportFields({ building: "", categoryId: null, conditionRating: null, criticalityRating: null }, { building: true, floor: false, zone: false, office: false }), ["building", "category", "condition", "criticality"]);
+});
+
+test("financial import normalization requires currency and understands supported life units", async () => {
+  assert.equal(importedCurrency("AED"), "AED");
+  assert.equal(importedCurrency("درهم"), "AED");
+  assert.equal(importedMoney("12,500.75 AED"), 12500.75);
+  assert.equal(importedMoney("not a price"), null);
+  assert.equal(importedYears("24 months"), 2);
+  assert.equal(importedYears("10 years"), 10);
+  assert.equal(importedIsoDate("2026-09-12"), "2026-09-12");
+  assert.equal(importedIsoDate("12/09/2026"), null);
+  const route = await readFile(new URL("../app/api/reports/route.ts", import.meta.url), "utf8");
+  assert.match(route, /Financial values require an explicit ISO currency/);
+  assert.match(route, /estimated_price: estimatedPrice/);
+  assert.match(route, /sourceReplacementCost/);
 });
 
 test("repair comparison only uses explicit inputs and never manufactures a replacement price", () => {

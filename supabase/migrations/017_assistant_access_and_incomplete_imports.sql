@@ -24,6 +24,16 @@ on conflict (app_user_id, module_key) do nothing;
 -- Missing ratings are allowed while imported rows await review. Publishing/
 -- approving still requires complete ratings in the application workflow.
 -- Retain existing per-project survey requirements for capture/manual flows.
+alter table public.assets
+  add column if not exists operational_status_source_raw text;
+
+update public.assets
+set
+  operational_status_source_raw = coalesce(operational_status_source_raw, operational_status),
+  operational_status = 'unknown'
+where operational_status is null
+   or operational_status not in ('unknown','active','maintenance','out_of_service','transferred','disposed');
+
 alter table public.assets drop constraint if exists assets_operational_status_check;
 alter table public.assets add constraint assets_operational_status_check
   check (operational_status in ('unknown','active','maintenance','out_of_service','transferred','disposed'));

@@ -21,7 +21,7 @@ export type AssetDependency = {
   upstreamAssetId: string;
   downstreamAssetId: string;
   dependencyType: string;
-  impact: "low" | "medium" | "high" | "critical";
+  impact: "unassessed" | "low" | "medium" | "high" | "critical";
   note?: string;
 };
 
@@ -86,8 +86,26 @@ function searchable(asset: IntelligenceAsset) {
   return [asset.assetNo, asset.assetType, asset.location, asset.building, asset.operationalStatus, ...asset.fields.flatMap(field => [field.key, field.label, field.value])].join(" ").toLowerCase();
 }
 
+export function isTotalAssetCountQuestion(question: string) {
+  const query = question.trim().toLowerCase();
+  if (!query) return false;
+  const qualified = /critical|poor|weak|maintenance|building|floor|zone|type|category|حرج|ضعيف|صيانة|مبنى|طابق|زون|نوع|فئة/.test(query);
+  if (qualified) return false;
+  const english = /(?:how\s+many|total(?:\s+number)?|number\s+of|count)\s+(?:of\s+)?(?:the\s+)?assets?\b/.test(query)
+    || /\bassets?\s+(?:total|count)\b/.test(query);
+  const arabic = /(?:كم|ما)\s+(?:هو\s+)?(?:عدد|إجمالي|اجمالي)?\s*(?:الأصول|الاصول|أصل|اصل)/.test(query)
+    || /(?:عدد|إجمالي|اجمالي)\s+(?:الأصول|الاصول)/.test(query);
+  return english || arabic;
+}
+
 export function askAssetLens(question: string, assets: IntelligenceAsset[], language: "ar" | "en" = "en") {
   const query = question.trim().toLowerCase();
+  if (isTotalAssetCountQuestion(question)) {
+    const summary = language === "ar"
+      ? `إجمالي الأصول المسجلة في نطاق المشروع المسموح لك به هو ${assets.length} أصلًا.`
+      : `The authorized project register contains ${assets.length} assets in total.`;
+    return { summary, matches: assets.slice(0, 50), totalMatches: assets.length, totalRisk: assets.reduce((sum, asset) => sum + assetRiskScore(asset), 0), grounded: true as const };
+  }
   let matches = [...assets];
   let filtered = false;
   if (/critical|حرج/.test(query) && !/critical condition|حالة حرجة|high critical|عالي الأهمية/.test(query)) { matches = matches.filter(asset => Number(asset.criticalityRating) === 5); filtered = true; }

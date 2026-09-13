@@ -94,3 +94,26 @@ test("OpenAI is an available server-side assistant provider without client-side 
     }
   }
 });
+
+test("total asset counts bypass lexical search and do not require an AI provider", async () => {
+  const previousKey = process.env.GEMINI_API_KEY;
+  const originalFetch = globalThis.fetch;
+  process.env.GEMINI_API_KEY = "should-not-be-used";
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; throw new Error("AI must not be called for a deterministic total"); };
+  try {
+    const english = await answerAssetLens("how many total asset in my project?", assets, "en");
+    const arabic = await answerAssetLens("كم عدد الأصول في مشروعي؟", assets, "ar");
+    assert.equal(calls, 0);
+    assert.equal(english.mode, "calculation");
+    assert.equal(english.totalMatches, 3);
+    assert.match(english.summary, /3 assets/);
+    assert.equal(arabic.mode, "calculation");
+    assert.equal(arabic.totalMatches, 3);
+    assert.match(arabic.summary, /3/);
+    assert.equal((await answerAssetLens("how many critical assets?", assets, "en")).mode, "register_search");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = previousKey;
+  }
+});

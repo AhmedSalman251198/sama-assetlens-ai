@@ -77,6 +77,8 @@ const HEADER_ALIASES = new Set([
   "serial", "serialno", "serialnumber", "sn", "الرقمالتسلسلي", "building", "site", "location", "المبنى", "الموقع",
   "floor", "level", "الطابق", "zone", "area", "الزون", "المنطقة", "office", "room", "المكتب", "الغرفة",
   "condition", "assetcondition", "حالةالأصل", "criticality", "importance", "الأهمية", "category", "assetcategory", "التصنيف",
+  "operationalstatus", "replacementcost", "estimatedprice", "purchaseprice", "currency", "pricecurrency", "usefullife", "remaininglife", "installationdate",
+  "حالةالتشغيل", "تكلفةالاستبدال", "السعرالتقديري", "العملة", "العمرالافتراضي", "العمرالمتبقي", "تاريخالتركيب",
 ]);
 
 function normalizedHeader(value: string) {

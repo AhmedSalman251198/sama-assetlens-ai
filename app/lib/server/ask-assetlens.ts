@@ -1,4 +1,4 @@
-import { applyAskQueryPlan, askAssetLens, askAssetMetrics, assetRiskScore, validateAskQueryPlan, type IntelligenceAsset } from "../asset-intelligence.ts";
+import { applyAskQueryPlan, askAssetLens, askAssetMetrics, assetRiskScore, isTotalAssetCountQuestion, validateAskQueryPlan, type IntelligenceAsset } from "../asset-intelligence.ts";
 import { buildGeminiModelCandidates, isGeminiModelUnavailable } from "./gemini-models.mjs";
 
 type Language = "ar" | "en";
@@ -60,6 +60,9 @@ export async function answerAssetLens(question: string, assets: IntelligenceAsse
   const previousUser = [...history].reverse().find(entry => entry.role === "user")?.text || "";
   const contextualQuestion = /\b(it|this|those|them|these)\b|(?:هذا|هذي|ده|دي|دول|منهم|نفسها|نفسه|أي واحد)/i.test(question) && previousUser ? `${previousUser} ${question}` : question;
   const fallback = (reason: string) => ({ ...askAssetLens(contextualQuestion, assets, language), mode: "register_search" as const, citations: [] as string[], limitation: reason });
+  if (isTotalAssetCountQuestion(contextualQuestion)) {
+    return { ...askAssetLens(contextualQuestion, assets, language), mode: "calculation" as const, citations: [] as string[], limitation: "" };
+  }
   if (!assets.length) return fallback(language === "ar" ? "لا توجد أصول متاحة في المشروع." : "No assets are available in this project.");
   const geminiKey = (process.env.GEMINI_API_KEY || "").trim();
   const openAiKey = (process.env.OPENAI_API_KEY || "").trim();
