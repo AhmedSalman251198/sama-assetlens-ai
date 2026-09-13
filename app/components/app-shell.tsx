@@ -1,25 +1,28 @@
 "use client";
 
 import Image from "next/image";
+import AssetLensAssistant from "./assetlens-assistant";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, ApiClientError, invalidateApiCache, prefetchApi } from "../lib/api-client";
-import { changePassword, signOut } from "../lib/supabase-auth";
+import { AUTH_SESSION_EVENT, changePassword, isStrongPassword, signOut } from "../lib/supabase-auth";
 import { canUseModule, ModuleKey, ModulePermission } from "../lib/module-permissions";
+import { applyUiPreferences, readUiLanguage, readUiTheme, saveUiLanguage, saveUiTheme, UI_LANGUAGE_EVENT, UI_THEME_EVENT, UiLanguage, UiTheme } from "../lib/ui-preferences";
 
 type UserRole = "admin" | "project_manager" | "reviewer" | "surveyor" | "viewer";
 type Me = { name: string; email: string; role: UserRole; modules: ModuleKey[]; modulePermissions: ModulePermission[] };
 type NavItem = { href: string; label: string; labelAr: string; icon: IconName; module: ModuleKey };
-type IconName = "dashboard" | "capture" | "assets" | "organization" | "location" | "transfer" | "reports" | "admin" | "chevron" | "menu" | "close" | "logout" | "wifi";
+type IconName = "dashboard" | "capture" | "assets" | "organization" | "location" | "transfer" | "reports" | "intelligence" | "admin" | "chevron" | "menu" | "close" | "logout" | "wifi";
 
 const navigation: NavItem[] = [
   { href: "/", label: "Dashboard", labelAr: "لوحة التحكم", icon: "dashboard", module: "dashboard" },
   { href: "/capture", label: "Capture & Analyze", labelAr: "التقاط وتحليل", icon: "capture", module: "capture" },
   { href: "/organization", label: "Organization", labelAr: "المشاريع والهيكل", icon: "organization", module: "organization" },
-  { href: "/locations", label: "Locations", labelAr: "المواقع", icon: "location", module: "locations" },
+  { href: "/locations", label: "Asset Management", labelAr: "إدارة الأصول", icon: "assets", module: "locations" },
   { href: "/transfers", label: "Asset Transfer", labelAr: "نقل الأصول", icon: "transfer", module: "transfers" },
   { href: "/reports", label: "Reports", labelAr: "التقارير", icon: "reports", module: "reports" },
+  { href: "/intelligence", label: "Asset Intelligence", labelAr: "ذكاء الأصول", icon: "intelligence", module: "intelligence" },
   { href: "/admin", label: "Administration", labelAr: "الإدارة", icon: "admin", module: "administration" },
 ];
 
@@ -27,13 +30,14 @@ const pageTitles: Record<string, { ar: string; en: string }> = {
   "/": { ar: "لوحة التحكم", en: "Dashboard" },
   "/capture": { ar: "التقاط وتحليل أصل", en: "Capture & Analyze" },
   "/organization": { ar: "المشاريع والهيكل", en: "Organization" },
-  "/locations": { ar: "المواقع", en: "Locations" },
+  "/locations": { ar: "إدارة الأصول", en: "Asset Management" },
   "/transfers": { ar: "نقل الأصول", en: "Asset Transfer" },
   "/reports": { ar: "التقارير", en: "Reports" },
+  "/intelligence": { ar: "ذكاء الأصول", en: "Asset Intelligence" },
   "/admin": { ar: "إدارة النظام", en: "Administration" },
 };
 
-const SERVICE_WORKER_VERSION = "16.3.0";
+const SERVICE_WORKER_VERSION = "21.0.0";
 const roleLabels: Record<UserRole, string> = { admin: "Administrator", project_manager: "Project Manager", reviewer: "Reviewer", surveyor: "Surveyor", viewer: "Viewer" };
 
 function Icon({ name }: { name: IconName }) {
@@ -45,6 +49,7 @@ function Icon({ name }: { name: IconName }) {
   if (name === "location") return <svg {...common}><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>;
   if (name === "transfer") return <svg {...common}><path d="M7 7h12l-3-3M17 17H5l3 3M19 7l-3 3M5 17l3-3"/></svg>;
   if (name === "reports") return <svg {...common}><path d="M5 3h14v18H5z"/><path d="M9 17v-4M12 17V8M15 17v-6"/></svg>;
+  if (name === "intelligence") return <svg {...common}><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="m7 7.5 3 2.8m4 0 3-2.8m-10 9 3-2.8m4 0 3 2.8"/></svg>;
   if (name === "admin") return <svg {...common}><circle cx="12" cy="8" r="3"/><path d="M6 20a6 6 0 0 1 12 0M19 5v4M17 7h4"/></svg>;
   if (name === "chevron") return <svg {...common}><path d="m9 18 6-6-6-6"/></svg>;
   if (name === "menu") return <svg {...common}><path d="M4 7h16M4 12h16M4 17h16"/></svg>;
@@ -64,6 +69,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [online, setOnline] = useState(true);
+  const [language, setLanguage] = useState<UiLanguage>("ar");
+  const [theme, setTheme] = useState<UiTheme>("light");
   const [me, setMe] = useState<Me | null>(null);
   const [navigatingTo, setNavigatingTo] = useState("");
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -74,9 +81,27 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const profileRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const resetAccountState = () => { invalidateApiCache(); setMe(null); };
+    window.addEventListener(AUTH_SESSION_EVENT, resetAccountState);
+    return () => window.removeEventListener(AUTH_SESSION_EVENT, resetAccountState);
+  }, []);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => { setDrawerOpen(false); setProfileOpen(false); setNavigatingTo(""); }, 0);
     return () => window.clearTimeout(timer);
   }, [pathname]);
+
+  useEffect(() => {
+    const nextLanguage = readUiLanguage(); const nextTheme = readUiTheme();
+    applyUiPreferences(nextLanguage, nextTheme);
+    const timer = window.setTimeout(() => { setLanguage(nextLanguage); setTheme(nextTheme); }, 0);
+    const onLanguage = (event: Event) => { const value = (event as CustomEvent<UiLanguage>).detail || readUiLanguage(); setLanguage(value); applyUiPreferences(value, readUiTheme()); };
+    const onTheme = (event: Event) => { const value = (event as CustomEvent<UiTheme>).detail || readUiTheme(); setTheme(value); applyUiPreferences(readUiLanguage(), value); };
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onMedia = () => { if (readUiTheme() === "system") applyUiPreferences(readUiLanguage(), "system"); };
+    window.addEventListener(UI_LANGUAGE_EVENT, onLanguage); window.addEventListener(UI_THEME_EVENT, onTheme); media.addEventListener("change", onMedia);
+    return () => { window.clearTimeout(timer); window.removeEventListener(UI_LANGUAGE_EVENT, onLanguage); window.removeEventListener(UI_THEME_EVENT, onTheme); media.removeEventListener("change", onMedia); };
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -171,7 +196,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }, [drawerOpen]);
 
   const visibleNavigation = useMemo(() => navigation.filter(item => me && canUseModule(me.modulePermissions, item.module)), [me]);
-  const title = pageTitles[pathname] || { ar: "AssetLens AI", en: "Workspace" };
+  const title = Object.entries(pageTitles).find(([route]) => isActive(pathname, route))?.[1] || { ar: "AssetLens AI", en: "Workspace" };
   const initials = (me?.name || me?.email || "AL").split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join("").toUpperCase();
   const currentModule = navigation.find(item => isActive(pathname, item.href))?.module;
   const deniedCurrentRoute = Boolean(me && currentModule && !canUseModule(me.modulePermissions, currentModule));
@@ -185,24 +210,26 @@ export default function AppShell({ children }: { children: ReactNode }) {
   if (pathname === "/login" || pathname === "/scan") return <>{children}</>;
 
   if (deniedCurrentRoute) {
-    return <div className="al-navigation-loader is-static" role="status"><div><Image src="/assetlens-logo.png" alt="" width={170} height={55} /><span>جاري فتح أول صفحة مسموحة…</span><i /></div></div>;
+    return <div className="al-navigation-loader is-static" role="status"><div><Image src="/assetlens-logo.png" alt="" width={170} height={55} /><span>{language === "ar" ? "جاري فتح أول صفحة مسموحة…" : "Opening your first allowed page…"}</span><i /></div></div>;
   }
 
   async function logout() {
     await signOut();
     invalidateApiCache();
-    router.replace("/login");
+    setMe(null);
+    window.location.replace("/login");
   }
 
   async function submitPassword() {
     setPasswordMessage("");
-    if (newPassword !== confirmPassword) { setPasswordMessage("كلمتا المرور غير متطابقتين."); return; }
+    if (newPassword !== confirmPassword) { setPasswordMessage(language === "ar" ? "كلمتا المرور غير متطابقتين." : "Passwords do not match."); return; }
+    if (!isStrongPassword(newPassword)) { setPasswordMessage(language === "ar" ? "استخدم 10 أحرف على الأقل تشمل حرفًا كبيرًا وصغيرًا ورقمًا ورمزًا." : "Use at least 10 characters including uppercase, lowercase, a number and a symbol."); return; }
     setPasswordBusy(true);
     try {
       await changePassword(newPassword);
-      setPasswordMessage("تم تغيير كلمة المرور بنجاح.");
+      setPasswordMessage(language === "ar" ? "تم تغيير كلمة المرور بنجاح." : "Password changed successfully.");
       setNewPassword(""); setConfirmPassword("");
-    } catch (reason) { setPasswordMessage(reason instanceof Error ? reason.message : "تعذر تغيير كلمة المرور."); }
+    } catch (reason) { setPasswordMessage(reason instanceof Error ? reason.message : (language === "ar" ? "تعذر تغيير كلمة المرور." : "Password could not be changed.")); }
     finally { setPasswordBusy(false); }
   }
 
@@ -211,6 +238,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     if (href === "/") void prefetchApi("/api/dashboard", 20_000);
     else if (["/organization", "/locations", "/transfers"].includes(href)) void prefetchApi("/api/config?scope=structure", 5 * 60_000);
     else if (href === "/reports") void prefetchApi("/api/reports", 30_000);
+    else if (href === "/intelligence") void prefetchApi("/api/intelligence", 30_000);
     else if (href === "/capture") void prefetchApi("/api/config?scope=capture", 5 * 60_000);
   }
 
@@ -226,51 +254,64 @@ export default function AppShell({ children }: { children: ReactNode }) {
     });
   }
 
+  function toggleLanguage() {
+    const next = language === "ar" ? "en" : "ar";
+    saveUiLanguage(next); applyUiPreferences(next, theme);
+  }
+
+  function cycleTheme() {
+    const next: UiTheme = theme === "light" ? "dark" : theme === "dark" ? "system" : "light";
+    saveUiTheme(next); applyUiPreferences(language, next);
+  }
+
   return (
-    <div className={`al-frame ${collapsed ? "is-collapsed" : ""}`} dir="rtl" aria-busy={Boolean(navigatingTo)}>
-      <button className={`al-drawer-backdrop ${drawerOpen ? "is-open" : ""}`} onClick={() => setDrawerOpen(false)} aria-label="إغلاق القائمة" tabIndex={drawerOpen ? 0 : -1} />
-      <aside id="assetlens-navigation" className={`al-sidebar ${drawerOpen ? "is-open" : ""}`} aria-label="التنقل الرئيسي">
+    <div className={`al-frame ${collapsed ? "is-collapsed" : ""}`} dir={language === "ar" ? "rtl" : "ltr"} aria-busy={Boolean(navigatingTo)}>
+      <button className={`al-drawer-backdrop ${drawerOpen ? "is-open" : ""}`} onClick={() => setDrawerOpen(false)} aria-label={language === "ar" ? "إغلاق القائمة" : "Close navigation"} tabIndex={drawerOpen ? 0 : -1} />
+      <aside id="assetlens-navigation" className={`al-sidebar ${drawerOpen ? "is-open" : ""}`} aria-label={language === "ar" ? "التنقل الرئيسي" : "Primary navigation"}>
         <div className="al-sidebar-brand">
           <Image src="/assetlens-logo.png" alt="AssetLens AI" width={180} height={58} priority />
-          <button className="al-mobile-close" onClick={() => setDrawerOpen(false)} aria-label="إغلاق القائمة"><Icon name="close" /></button>
+          <button className="al-mobile-close" onClick={() => setDrawerOpen(false)} aria-label={language === "ar" ? "إغلاق القائمة" : "Close navigation"}><Icon name="close" /></button>
         </div>
         <nav className="al-nav">
           {visibleNavigation.map(item => (
             <Link key={item.href} href={item.href} className={isActive(pathname, item.href) ? "active" : ""} aria-current={isActive(pathname, item.href) ? "page" : undefined} title={collapsed ? item.label : undefined} onPointerEnter={() => warmNavigation(item.href)} onFocus={() => warmNavigation(item.href)} onClick={() => beginNavigation(item.href)}>
               <span className="al-nav-icon"><Icon name={item.icon} /></span>
-              <span className="al-nav-copy"><strong>{item.label}</strong><small>{item.labelAr}</small></span>
+              <span className="al-nav-copy"><strong>{language === "ar" ? item.labelAr : item.label}</strong><small>{language === "ar" ? item.label : item.labelAr}</small></span>
               <span className="al-nav-arrow"><Icon name="chevron" /></span>
             </Link>
           ))}
         </nav>
         <div className="al-sidebar-foot">
           <div className="al-user-summary"><span>{initials || "AL"}</span><div><strong>{me?.name || "AssetLens User"}</strong><small>{me ? roleLabels[me.role] : "User"}</small></div></div>
-          <button className="al-collapse" onClick={toggleCollapsed} aria-label={collapsed ? "توسيع القائمة" : "تصغير القائمة"}><Icon name="chevron" /><span>{collapsed ? "Expand" : "Collapse menu"}</span></button>
+          <button className="al-collapse" onClick={toggleCollapsed} aria-label={collapsed ? (language === "ar" ? "توسيع القائمة" : "Expand navigation") : (language === "ar" ? "تصغير القائمة" : "Collapse navigation")}><Icon name="chevron" /><span>{collapsed ? (language === "ar" ? "توسيع" : "Expand") : (language === "ar" ? "تصغير القائمة" : "Collapse menu")}</span></button>
         </div>
       </aside>
       <div className="al-stage">
         <div className={`al-route-progress ${navigatingTo ? "is-active" : ""}`} aria-hidden="true"><span /></div>
-        {navigatingTo && <div className="al-navigation-loader" role="status" aria-live="polite"><div><Image src="/assetlens-logo.png" alt="" width={170} height={55} /><span>{online ? "جاري فتح الصفحة…" : "جاري فتح النسخة المحفوظة…"}</span><i /></div></div>}
+        {navigatingTo && <div className="al-navigation-loader" role="status" aria-live="polite"><div><Image src="/assetlens-logo.png" alt="" width={170} height={55} /><span>{online ? (language === "ar" ? "جاري فتح الصفحة…" : "Opening page…") : (language === "ar" ? "جاري فتح النسخة المحفوظة…" : "Opening cached page…")}</span><i /></div></div>}
         <header className="al-topbar">
           <div className="al-topbar-title">
-            <button className="al-menu-button" onClick={() => setDrawerOpen(true)} aria-expanded={drawerOpen} aria-controls="assetlens-navigation" aria-label="فتح القائمة"><Icon name="menu" /></button>
-            <div><small>{title.en}</small><h1>{title.ar}</h1></div>
+            <button className="al-menu-button" onClick={() => setDrawerOpen(true)} aria-expanded={drawerOpen} aria-controls="assetlens-navigation" aria-label={language === "ar" ? "فتح القائمة" : "Open navigation"}><Icon name="menu" /></button>
+            <div><small>{language === "ar" ? title.en : title.ar}</small><h1>{language === "ar" ? title.ar : title.en}</h1></div>
           </div>
           <div className="al-topbar-actions">
-            <span className={`al-network ${online ? "online" : "offline"}`}><i /><span>{online ? "متصل" : "بدون إنترنت"}</span></span>
-            {me && canUseModule(me.modulePermissions, "capture", "create") && <Link className="al-quick-capture" href="/capture" onPointerEnter={() => warmNavigation("/capture")} onClick={() => beginNavigation("/capture")}><Icon name="capture" /><span>التقاط أصل</span></Link>}
+            <button className="al-language-toggle" onClick={toggleLanguage} aria-label={language === "ar" ? "Switch to English" : "التبديل إلى العربية"}>{language === "ar" ? "EN" : "ع"}</button>
+            <button className="al-theme-toggle" onClick={cycleTheme} title={theme === "light" ? (language === "ar" ? "الوضع النهاري" : "Light mode") : theme === "dark" ? (language === "ar" ? "الوضع الليلي" : "Dark mode") : (language === "ar" ? "حسب النظام" : "System theme")} aria-label={language === "ar" ? "تغيير مظهر الموقع" : "Change site theme"}>{theme === "light" ? "☀" : theme === "dark" ? "☾" : "◐"}</button>
+            <span className={`al-network ${online ? "online" : "offline"}`}><i /><span>{online ? (language === "ar" ? "متصل" : "Online") : (language === "ar" ? "بدون إنترنت" : "Offline")}</span></span>
+            {me && canUseModule(me.modulePermissions, "capture", "create") && <Link className="al-quick-capture" href="/capture" onPointerEnter={() => warmNavigation("/capture")} onClick={() => beginNavigation("/capture")}><Icon name="capture" /><span>{language === "ar" ? "التقاط أصل" : "Capture asset"}</span></Link>}
             <div className="al-profile-menu" ref={profileRef}>
-              <button onClick={() => setProfileOpen(value => !value)} aria-expanded={profileOpen} aria-label="خيارات الحساب"><span>{initials || "AL"}</span><div><strong>{me?.name || "AssetLens User"}</strong><small>{me?.email || "جاري التحقق…"}</small></div></button>
-              {profileOpen && <div className="al-profile-popover"><div><strong>{me?.name || "AssetLens User"}</strong><small>{me?.email || ""}</small></div><button onClick={() => { setProfileOpen(false); setPasswordOpen(true); setPasswordMessage(""); }}>🔐 تغيير كلمة المرور</button><button onClick={() => void logout()}><Icon name="logout" /> تسجيل الخروج</button></div>}
+              <button onClick={() => setProfileOpen(value => !value)} aria-expanded={profileOpen} aria-label={language === "ar" ? "خيارات الحساب" : "Account options"}><span>{initials || "AL"}</span><div><strong>{me?.name || "AssetLens User"}</strong><small>{me?.email || (language === "ar" ? "جاري التحقق…" : "Verifying…")}</small></div></button>
+              {profileOpen && <div className="al-profile-popover"><div><strong>{me?.name || "AssetLens User"}</strong><small>{me?.email || ""}</small></div><button onClick={() => { setProfileOpen(false); setPasswordOpen(true); setPasswordMessage(""); }}>🔐 {language === "ar" ? "تغيير كلمة المرور" : "Change password"}</button><button onClick={() => void logout()}><Icon name="logout" /> {language === "ar" ? "تسجيل الخروج" : "Sign out"}</button></div>}
             </div>
           </div>
         </header>
         <main className="al-content">{children}</main>
-        <nav className="al-mobile-nav" aria-label="التنقل السريع">
-          {visibleNavigation.filter(item => ["/", "/capture", "/locations", "/reports"].includes(item.href)).map(item => <Link key={item.href} href={item.href} className={isActive(pathname, item.href) ? "active" : ""} aria-current={isActive(pathname, item.href) ? "page" : undefined} onTouchStart={() => warmNavigation(item.href)} onClick={() => beginNavigation(item.href)}><Icon name={item.icon} /><span>{item.label === "Capture & Analyze" ? "Capture" : item.label.split(" ")[0]}</span></Link>)}
+        <nav className="al-mobile-nav" aria-label={language === "ar" ? "التنقل السريع" : "Quick navigation"}>
+          {visibleNavigation.filter(item => ["/", "/capture", "/locations", "/reports"].includes(item.href)).map(item => <Link key={item.href} href={item.href} className={isActive(pathname, item.href) ? "active" : ""} aria-current={isActive(pathname, item.href) ? "page" : undefined} onTouchStart={() => warmNavigation(item.href)} onClick={() => beginNavigation(item.href)}><Icon name={item.icon} /><span>{language === "ar" ? item.labelAr.split(" ")[0] : item.label === "Capture & Analyze" ? "Capture" : item.label.split(" ")[0]}</span></Link>)}
         </nav>
       </div>
-      {passwordOpen && <div className="al-dialog-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !passwordBusy) setPasswordOpen(false); }}><section className="al-dialog" role="dialog" aria-modal="true" aria-labelledby="password-dialog-title"><span className="al-dialog-icon">🔐</span><h3 id="password-dialog-title">تغيير كلمة المرور</h3><p>استخدم كلمة مرور قوية من 10 أحرف على الأقل.</p><label><span>كلمة المرور الجديدة</span><input className="ltr-input" type="password" autoComplete="new-password" value={newPassword} onChange={event => setNewPassword(event.target.value)} /></label><label><span>تأكيد كلمة المرور</span><input className="ltr-input" type="password" autoComplete="new-password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} /></label>{passwordMessage && <p role="status">{passwordMessage}</p>}<div><button className="al-secondary-button" disabled={passwordBusy} onClick={() => setPasswordOpen(false)}>إغلاق</button><button className="al-primary-button" disabled={passwordBusy || newPassword.length < 10} onClick={() => void submitPassword()}>{passwordBusy ? "جاري الحفظ…" : "حفظ كلمة المرور"}</button></div></section></div>}
+      {me && canUseModule(me.modulePermissions, "assistant") && <AssetLensAssistant key={me.email} language={language} />}
+      {passwordOpen && <div className="al-dialog-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !passwordBusy) setPasswordOpen(false); }}><section className="al-dialog" role="dialog" aria-modal="true" aria-labelledby="password-dialog-title"><span className="al-dialog-icon">🔐</span><h3 id="password-dialog-title">{language === "ar" ? "تغيير كلمة المرور" : "Change password"}</h3><p>{language === "ar" ? "استخدم 10 أحرف على الأقل تشمل حرفًا كبيرًا وصغيرًا ورقمًا ورمزًا." : "Use at least 10 characters including uppercase, lowercase, a number and a symbol."}</p><label><span>{language === "ar" ? "كلمة المرور الجديدة" : "New password"}</span><input className="ltr-input" type="password" autoComplete="new-password" minLength={10} value={newPassword} onChange={event => setNewPassword(event.target.value)} /></label><label><span>{language === "ar" ? "تأكيد كلمة المرور" : "Confirm password"}</span><input className="ltr-input" type="password" autoComplete="new-password" minLength={10} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} /></label>{passwordMessage && <p role="status">{passwordMessage}</p>}<div><button className="al-secondary-button" disabled={passwordBusy} onClick={() => setPasswordOpen(false)}>{language === "ar" ? "إغلاق" : "Close"}</button><button className="al-primary-button" disabled={passwordBusy || !isStrongPassword(newPassword) || newPassword !== confirmPassword} onClick={() => void submitPassword()}>{passwordBusy ? (language === "ar" ? "جاري الحفظ…" : "Saving…") : (language === "ar" ? "حفظ كلمة المرور" : "Save password")}</button></div></section></div>}
     </div>
   );
 }

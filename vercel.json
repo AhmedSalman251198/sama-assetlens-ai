@@ -5,6 +5,12 @@
   "functions": {
     "app/api/analyze/route.ts": { "maxDuration": 60 },
     "app/api/assets/route.ts": { "maxDuration": 60 },
-    "app/api/jobs/route.ts": { "maxDuration": 60 }
-  }
+    "app/api/assets/[id]/enrich/route.ts": { "maxDuration": 60 },
+    "app/api/jobs/route.ts": { "maxDuration": 60 },
+    "app/api/maintenance/nameplate-cleanup/route.ts": { "maxDuration": 60 },
+    "app/api/reports/ai/route.ts": { "maxDuration": 60 }
+  },
+  "crons": [
+    { "path": "/api/maintenance/nameplate-cleanup", "schedule": "0 3 * * *" }
+  ]
 }

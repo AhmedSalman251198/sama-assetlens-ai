@@ -18,7 +18,7 @@ test("the production build renders every primary product route", async () => {
   }
   assert.match(pages[0], /لوحة متابعة الأصول/);
   assert.match(pages[3], /هيكل واضح لكل مشروع وموقع/);
-  assert.match(pages[4], /Locations/);
+  assert.match(pages[4], /Asset Management/);
   assert.match(pages[5], /Asset Transfer/);
 });
 
@@ -65,8 +65,8 @@ test("asset register is merged into reports and legacy deep links stay safe", as
   assert.match(reports, /\[row\.id, row\.assetNo/);
   assert.match(reports, /setDetail\(row\)/);
   assert.match(reports, /\/transfers\?asset=/);
-  assert.match(locations, /\/capture\?project=\$\{building\.projectId\}&building=\$\{building\.id\}/);
-  assert.match(locations, /params\.get\("building"\)/);
+  assert.match(locations, /view: "manage"/);
+  assert.match(locations, /action: "manage"/);
   assert.match(capture, /prefillAppliedRef/);
 });
 
@@ -123,7 +123,9 @@ test("Excel handling is lazy, bounded, and free of the vulnerable xlsx package",
   assert.equal(pkg.dependencies.exceljs, "^4.4.0");
   assert.match(excelClient, /await import\("exceljs"\)/);
   assert.match(excelClient, /limit = 500/);
-  assert.match(reports, /accept="\.xlsx,\.csv"/);
+  assert.match(reports, /accept="\.xlsx,\.csv,\.tsv"/);
+  assert.match(excelClient, /headerScore/);
+  assert.match(excelClient, /workbook\.worksheets\.map/);
 });
 
 test("PWA shell includes offline capture and avoids caching login or APIs", async () => {
@@ -143,16 +145,16 @@ test("PWA shell includes offline capture and avoids caching login or APIs", asyn
   assert.match(worker, /url\.searchParams\.has\("_rsc"\)/);
   assert.match(worker, /Next-Router-State-Tree/);
   assert.match(shell, /updateViaCache: "none"/);
-  assert.match(shell, /SERVICE_WORKER_VERSION = "16\.3\.0"/);
+  assert.match(shell, /SERVICE_WORKER_VERSION = "21\.0\.0"/);
   assert.match(shell, /process\.env\.NODE_ENV !== "production"/);
   assert.match(layout, /data-scroll-behavior="smooth"/);
-  assert.match(layout, /assetlens_dev_cache_reset_16_3_0/);
+  assert.match(layout, /assetlens_dev_cache_reset_19_0_0/);
   assert.match(css, /\.auth-logo\s*\{[\s\S]*?height:auto;/);
   assert.match(css, /\.al-content>\.assetlens-shell>\.app-sidebar/);
   assert.match(offlineQueue, /indexedDB\.open/);
 });
 
-test("offline asset QR stores the Supabase snapshot and renders without a network request", async () => {
+test("asset QR embeds an offline snapshot and refreshes from Supabase when online", async () => {
   const reports = await readText("../app/reports/page.tsx");
   const qr = await readText("../app/lib/asset-qr.ts");
   const endpoint = await readText("../app/api/assets/[id]/qr/route.ts");
@@ -161,20 +163,21 @@ test("offline asset QR stores the Supabase snapshot and renders without a networ
   assert.match(reports, /\/api\/assets\/\$\{encodeURIComponent\(row\.id\)\}\/qr/);
   assert.match(reports, /force: true/);
   assert.match(reports, /buildAssetQrPayload\(snapshot\.source\)/);
-  assert.match(reports, /createAssetQrText\(payload\)/);
+  assert.match(reports, /createAssetQrValue\(window\.location\.origin, payload\)/);
   assert.match(reports, /QRCode\.toDataURL/);
-  assert.match(reports, /width: 620, margin: 4/);
-  assert.match(reports, /width:190px;height:190px/);
+  assert.match(reports, /width: 360, margin: 2/);
+  assert.match(reports, /width:132px;height:132px/);
   assert.doesNotMatch(reports, /api\.qrserver\.com/);
-  assert.match(endpoint, /asset_custom_values/);
-  assert.match(endpoint, /custom_fields/);
+  assert.match(endpoint, /operational_status/);
+  assert.match(endpoint, /asset_categories\(label_ar,label_en\)/);
   assert.match(endpoint, /id=eq\.\$\{encodeURIComponent\(id\)\}/);
-  assert.match(qr, /Asset ID/);
-  assert.match(qr, /source\.customValues/);
-  assert.match(qr, /CURRENT_PREFIX = "alqr2"/);
-  assert.match(qr, /ASSETLENS-OFFLINE-V2/);
-  assert.match(qr, /CompressionStream/);
+  assert.match(qr, /addField\(fields, seen, "ID"/);
+  assert.match(qr, /STABLE_PREFIX = "alqr3"/);
+  assert.match(qr, /embedded immutable ID/);
+  assert.match(qr, /ASSETLENS ASSET V2/);
   assert.match(scan, /parseAssetQrValue\(window\.location\.href\)/);
+  assert.match(scan, /\/api\/public\/assets\/\$\{encodeURIComponent\(assetId\)\}/);
+  assert.match(scan, /localStorage\.setItem\(cacheKey\(assetId\)/);
   assert.match(worker, /"\/scan"/);
 });
 
@@ -194,13 +197,15 @@ test("self signup is removed and account management is super-admin only", async 
   const migration = await readText("../supabase/migrations/009_roles_offices_accounts.sql");
   const signupGuard = await readText("../supabase/migrations/007_super_admin_account_control.sql");
   assert.doesNotMatch(login, /signUp|mode === "signup"|إنشاء حساب جديد/);
-  assert.match(login, /إنشاء الحسابات والدعوات متاح فقط للسوبر أدمن/);
+  assert.match(login, /إنشاء الحسابات متاح فقط للسوبر أدمن/);
   assert.match(config, /accountActions/);
   assert.match(config, /isSuperAdminEmail\(auth\.actor\.email\)/);
   assert.match(config, /action === "createUser" && !rows\[0\]\?\.user_id/);
   assert.match(config, /createSupabasePasswordUser/);
+  assert.match(config, /assertSupabaseAdminConfigured/);
+  assert.match(config, /A login account already exists for this email/);
   assert.match(admin, /إنشاء حساب مباشر/);
-  assert.match(admin, /تغيير كلمة المرور/);
+  assert.match(admin, /resetUserPassword|كلمة المرور/);
   assert.match(admin, /value=\{userPassword\}/);
   assert.match(config, /validPassword/);
   assert.match(config, /updateSupabaseUserPassword/);
@@ -329,7 +334,7 @@ test("R16.1 requires and exports a five-level asset condition rating", async () 
   assert.match(capture, /قبل إرفاق أي صورة للتحليل/);
   assert.match(assets, /Choose the asset condition rating from 1 to 5 before saving/);
   assert.match(reports, /Condition Rating/);
-  assert.match(qr, /Asset Condition Rating/);
+  assert.match(qr, /addField\(fields, seen, "Condition"/);
   assert.equal((levels.match(/rating: [1-5]/g) || []).length, 5);
 });
 
@@ -382,11 +387,94 @@ test("R16.3 module permissions hide tabs and deny disallowed actions", async () 
   assert.match(shell, /visibleNavigation/);
   assert.match(config, /normalizeModulePermissions/);
   assert.match(config, /Only the AssetLens super administrator can create or manage user accounts/);
-  assert.match(admin, /صلاحيات القائمة الجانبية والإجراءات/);
+  assert.match(admin, /صلاحيات التابات والإجراءات/);
   assert.match(assets, /hasModuleAccess/);
   const reviewer = defaultModulePermissions("reviewer");
   assert.equal(canUseModule(reviewer, "administration"), false);
   assert.equal(canUseModule(reviewer, "reports", "approve"), true);
   const normalized = normalizeModulePermissions([{ module: "capture", view: false, create: true }], "surveyor");
   assert.equal(canUseModule(normalized, "capture", "create"), false);
+});
+
+test("R17 integrates categories, lifecycle, asset management, retention and AI PDF reports", async () => {
+  const migration = await readText("../supabase/migrations/013_asset_management_categories_retention.sql");
+  const capture = await readText("../app/capture/page.tsx");
+  const assets = await readText("../app/api/assets/route.ts");
+  const queue = await readText("../app/lib/server/asset-queue.ts");
+  const management = await readText("../app/locations/page.tsx");
+  const config = await readText("../app/api/config/route.ts");
+  const publicAsset = await readText("../app/api/public/assets/[id]/route.ts");
+  const cleanup = await readText("../app/api/maintenance/nameplate-cleanup/route.ts");
+  const aiReport = await readText("../app/api/reports/ai/route.ts");
+  const reportPage = await readText("../app/reports/ai/page.tsx");
+  const shell = await readText("../app/components/app-shell.tsx");
+  const vercel = JSON.parse(await readText("../vercel.json"));
+
+  assert.match(migration, /create table if not exists public\.asset_categories/);
+  assert.match(migration, /project_asset_categories/);
+  assert.match(migration, /operational_status in \('active','maintenance','out_of_service','transferred','disposed'\)/);
+  assert.match(migration, /estimated_price numeric/);
+  assert.match(migration, /useful_life_years numeric/);
+  assert.match(migration, /image_role text not null default 'asset'/);
+  assert.match(capture, /categoryId/);
+  assert.match(capture, /operationalStatus/);
+  assert.match(capture, /queue-section queue-section-at-end/);
+  assert.match(assets, /image_role: index === 0 \? "nameplate" : "asset"/);
+  assert.match(assets, /Date\.now\(\) \+ 30 \* 24 \* 60 \* 60 \* 1000/);
+  assert.match(queue, /status: "review"/);
+  assert.doesNotMatch(queue, /autoApproved/);
+  assert.match(management, /إدارة الأصول|Asset Management/);
+  assert.match(management, /assetOperationalStatusLabel/);
+  assert.match(management, /\/enrich/);
+  assert.match(config, /setProjectCategories/);
+  assert.match(config, /saveAssetCategory/);
+  assert.match(publicAsset, /supabasePublicRest/);
+  assert.match(publicAsset, /asset_qr_public_snapshot/);
+  assert.match(cleanup, /deleteAssetImagesAdmin/);
+  assert.ok(vercel.crons.some(item => item.path === "/api/maintenance/nameplate-cleanup"));
+  assert.match(aiReport, /GEMINI_API_KEY/);
+  assert.match(aiReport, /temperature: 0\.1/);
+  assert.match(reportPage, /window\.print\(\)/);
+  assert.match(shell, /saveUiLanguage/);
+  assert.match(shell, /saveUiTheme/);
+});
+
+test("R18 fixes review approval, direct account management and independent category ratings", async () => {
+  const capture = await readText("../app/capture/page.tsx");
+  const admin = await readText("../app/admin/page.tsx");
+  const config = await readText("../app/api/config/route.ts");
+  const migration = await readText("../supabase/migrations/014_independent_asset_criticality.sql");
+  assert.match(capture, /openRecordForReview/);
+  assert.match(capture, /queue-review/);
+  assert.match(capture, /canApproveAssets/);
+  assert.match(admin, /user-account-dialog/);
+  assert.match(admin, /professional-user-table/);
+  assert.match(admin, /category-professional-list/);
+  assert.doesNotMatch(admin, /Criticality افتراضية/);
+  assert.match(config, /updateSupabaseUserIdentity/);
+  assert.match(config, /deleteAssetCategory/);
+  assert.match(migration, /default_criticality_rating = null/);
+  assert.match(migration, /check \(default_criticality_rating is null\)/);
+});
+
+test("R18 delivers smart imports, richer AI reports and accessible dark surfaces", async () => {
+  const reports = await readText("../app/reports/page.tsx");
+  const reportsApi = await readText("../app/api/reports/route.ts");
+  const aiApi = await readText("../app/api/reports/ai/route.ts");
+  const aiPage = await readText("../app/reports/ai/page.tsx");
+  const css = await readText("../app/globals.css");
+  assert.match(reports, /inspectSpreadsheet/);
+  assert.match(reports, /import-mapping-grid/);
+  assert.match(reportsApi, /import_fingerprint/);
+  assert.match(reportsApi, /on_conflict=import_fingerprint/);
+  assert.match(reportsApi, /Duplicate serial/);
+  assert.match(reportsApi, /status: "review"/);
+  assert.match(reportsApi, /Incomplete import/);
+  assert.match(aiApi, /riskMatrix/);
+  assert.match(aiApi, /actionPlan/);
+  assert.match(aiApi, /dataQuality/);
+  assert.match(aiPage, /risk-matrix-section/);
+  assert.match(aiPage, /action-plan-section/);
+  assert.match(css, /html\[data-theme="dark"\][\s\S]*--ux-muted:#a8bdc5/);
+  assert.match(css, /prefers-contrast:more/);
 });

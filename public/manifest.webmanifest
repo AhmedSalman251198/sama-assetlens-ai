@@ -16,7 +16,7 @@
   "shortcuts": [
     { "name": "التقاط أصل", "short_name": "التقاط", "url": "/capture", "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
     { "name": "سجل الأصول", "short_name": "الأصول", "url": "/assets", "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
-    { "name": "المواقع", "short_name": "المواقع", "url": "/locations", "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
+    { "name": "إدارة الأصول", "short_name": "الأصول", "url": "/locations", "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
   ],
   "icons": [
     { "src": "/assetlens-icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },

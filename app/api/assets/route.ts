@@ -1,7 +1,8 @@
 import { drainAnalysisQueue, findDuplicateWarning } from "../../lib/server/asset-queue";
-import { deleteAssetImages, requestToken, supabaseRest, supabaseRestWithCount, uploadAssetImage, verifyAuthUser } from "../../lib/server/supabase";
+import { deleteAssetImages, requestToken, supabaseRest, supabaseRestAll, supabaseRestWithCount, uploadAssetImage, verifyAuthUser } from "../../lib/server/supabase";
 import type { AnalysisResult } from "../../lib/server/analyze-images";
 import { hasAnyModuleAccess, hasModuleAccess } from "../../lib/server/module-access";
+import { isAssetOperationalStatus } from "../../lib/asset-operational-status";
 import { after } from "next/server";
 
 export const runtime = "nodejs";
@@ -19,17 +20,24 @@ type AssetRow = {
   project_name: string; building_name: string; floor_name: string; zone_name: string; office_name: string; additional_locations: DynamicLocationValue[]; surveyor_email: string;
   source_file_names: string[]; asset_type: string; summary: string; fields: AnalysisResult["fields"];
   warnings: string[]; raw_text: string; overall_confidence: number; condition_rating: number | null; condition_justification: string; criticality_rating: number | null; status: string; error: string | null; created_at: string;
+  category_id: string | null; operational_status: string; estimated_price: number | null; replacement_cost: number | null; price_currency: string;
+  useful_life_years: number | null; installation_date: string | null; remaining_life_years: number | null; estimate_source: string; estimate_confidence: string;
+  enrichment_data: Record<string, unknown>; enrichment_source_url: string; enrichment_fetched_at: string | null; archived_at: string | null;
 };
 type JobRow = { id: string; asset_id: string; status: "queued" | "processing" | "completed" | "failed"; error: string | null; created_at: string };
 type ProjectRow = { id: string; name: string; require_building: boolean; require_floor: boolean; require_zone: boolean; require_office: boolean; allow_manual: boolean };
 type NamedRow = { id: string; name: string };
 type OfficeRow = NamedRow & { floor_id: string | null; zone_id: string | null };
+type ZoneRow = NamedRow & { floor_id: string | null };
 type DynamicLocationValue = { levelId: string; key: string; labelAr: string; labelEn: string; valueId: string; value: string };
-type LocationLevelRow = { id: string; level_key: string; label_ar: string; label_en: string; required: boolean; sort_order: number };
-type LocationOptionRow = { id: string; level_id: string; building_id: string | null; floor_id: string | null; zone_id: string | null; name: string };
+type LocationLevelRow = { id: string; level_key: string; label_ar: string; label_en: string; required: boolean; sort_order: number; parent_level_id: string | null };
+type LocationOptionRow = { id: string; level_id: string; building_id: string | null; floor_id: string | null; zone_id: string | null; office_id: string | null; parent_option_id: string | null; name: string };
 type SurveyConfigRow = { id: string; project_id: string };
 type CustomFieldRow = { id: string; config_id: string; field_key: string; label_ar: string; label_en: string; field_type: "text" | "textarea" | "number" | "date" | "select" | "boolean"; enabled: boolean; required: boolean; option_values: unknown; sort_order: number; asset_types?: string[]; unit?: string; ai_extract?: boolean; show_in_reports?: boolean; show_in_qr?: boolean };
 type CustomValueRow = { asset_id: string; custom_field_id: string; value_text: string };
+type CategoryRow = { id: string; code: string; label_ar: string; label_en: string; color: string; icon: string; default_useful_life_years: number | null; default_estimated_price: number | null; currency: string; default_criticality_rating: number | null; technical_fields: string[]; active: boolean };
+
+const ASSET_SELECT = "id,asset_no,project_id,building_id,floor_id,zone_id,office_id,survey_config_id,created_by,project_name,building_name,floor_name,zone_name,office_name,additional_locations,surveyor_email,source_file_names,asset_type,summary,fields,warnings,raw_text,overall_confidence,condition_rating,condition_justification,criticality_rating,status,error,created_at,category_id,operational_status,estimated_price,replacement_cost,price_currency,useful_life_years,installation_date,remaining_life_years,estimate_source,estimate_confidence,enrichment_data,enrichment_source_url,enrichment_fetched_at,archived_at";
 
 function mapResult(asset: AssetRow): AnalysisResult {
   return { assetType: asset.asset_type, summary: asset.summary, fields: asset.fields || [], warnings: asset.warnings || [], rawText: asset.raw_text, overallConfidence: Number(asset.overall_confidence) || 0, conditionRating: asset.condition_rating, conditionJustification: asset.condition_justification || "", criticalityRating: asset.criticality_rating };
@@ -43,9 +51,18 @@ function surveyContext(asset: AssetRow) {
     zoneId: asset.zone_id || "", zone: asset.zone_name,
     officeId: asset.office_id || "", office: asset.office_name,
     additionalLocations: Array.isArray(asset.additional_locations) ? asset.additional_locations : [],
+    categoryId: asset.category_id || "",
     conditionRating: asset.condition_rating,
     conditionJustification: asset.condition_justification || "",
     criticalityRating: asset.criticality_rating,
+    operationalStatus: asset.operational_status || "active",
+    estimatedPrice: asset.estimated_price == null ? null : Number(asset.estimated_price),
+    replacementCost: asset.replacement_cost == null ? null : Number(asset.replacement_cost),
+    priceCurrency: asset.price_currency || "AED",
+    usefulLifeYears: asset.useful_life_years == null ? null : Number(asset.useful_life_years),
+    installationDate: asset.installation_date || "",
+    remainingLifeYears: asset.remaining_life_years == null ? null : Number(asset.remaining_life_years),
+    estimateSource: asset.estimate_source || "",
     surveyorEmail: asset.surveyor_email,
   };
 }
@@ -79,6 +96,7 @@ function mapWorkspace(assets: AssetRow[], jobs: JobRow[], customFields: CustomFi
   const queue = jobs.map((job, index) => {
     const asset = byId.get(job.asset_id);
     if (!asset) return null;
+    if (job.status === "completed" && asset.status === "completed") return null;
     return {
       id: job.id, assetId: asset.id, order: index + 1, imageCount: asset.source_file_names.length,
       fileName: asset.source_file_names.join(" | "), createdAt: job.created_at, status: job.status,
@@ -104,7 +122,7 @@ async function workspace(token: string, viewerId: string) {
 
   const recentQueueCutoff = encodeURIComponent(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
   const [assets, jobs, customFields, customValues] = await Promise.all([
-    supabaseRest<AssetRow[]>(`assets?select=id,asset_no,project_id,building_id,floor_id,zone_id,office_id,survey_config_id,created_by,project_name,building_name,floor_name,zone_name,office_name,additional_locations,surveyor_email,source_file_names,asset_type,summary,fields,warnings,raw_text,overall_confidence,condition_rating,condition_justification,criticality_rating,status,error,created_at&${projectFilter}&order=created_at.desc&limit=5000`, token),
+    supabaseRest<AssetRow[]>(`assets?select=${ASSET_SELECT}&${projectFilter}&order=created_at.desc&limit=5000`, token),
     supabaseRest<JobRow[]>(`analysis_jobs?select=id,asset_id,status,error,created_at&created_at=gte.${recentQueueCutoff}&order=created_at.asc&limit=100`, token),
     supabaseRest<CustomFieldRow[]>("custom_fields?select=id,config_id,field_key,label_ar,label_en,field_type,enabled,required,option_values,sort_order&order=sort_order&limit=10000", token),
     supabaseRest<CustomValueRow[]>("asset_custom_values?select=asset_id,custom_field_id,value_text&limit=10000", token),
@@ -126,7 +144,7 @@ async function queueWorkspace(token: string, viewerId: string) {
   const assetIds = Array.from(new Set(jobs.map(job => job.asset_id)));
   if (!assetIds.length) return { records: [], jobs: [] };
   const assetFilter = `id=in.(${assetIds.map(encodeURIComponent).join(",")})`;
-  const assets = await supabaseRest<AssetRow[]>(`assets?select=id,asset_no,project_id,building_id,floor_id,zone_id,office_id,survey_config_id,created_by,project_name,building_name,floor_name,zone_name,office_name,additional_locations,surveyor_email,source_file_names,asset_type,summary,fields,warnings,raw_text,overall_confidence,condition_rating,condition_justification,criticality_rating,status,error,created_at&${assetFilter}&order=created_at.desc&limit=100`, token);
+  const assets = await supabaseRest<AssetRow[]>(`assets?select=${ASSET_SELECT}&${assetFilter}&order=created_at.desc&limit=100`, token);
   const accessibleAssetIds = new Set(assets.map(asset => asset.id));
   const filteredJobs = jobs.filter(job => accessibleAssetIds.has(job.asset_id));
   const [customFields, customValues] = await Promise.all([
@@ -152,17 +170,26 @@ async function listWorkspace(request: Request, token: string, viewerId: string) 
   const status = text(params.get("status"), 20);
   const projectId = text(params.get("project"), 80);
   const assetId = text(params.get("asset"), 80);
+  const categoryId = text(params.get("category"), 80);
+  const operationalStatus = text(params.get("operationalStatus"), 40);
+  const condition = Number(params.get("condition"));
+  const criticality = Number(params.get("criticality"));
   const search = text(params.get("search"), 80).replace(/[,*()]/g, " ").replace(/\s+/g, " ").trim();
   const allowedStatuses = new Set(["queued", "processing", "completed", "review", "failed"]);
   const filters = [
     status && allowedStatuses.has(status) ? `status=eq.${encodeURIComponent(status)}` : "",
     projectId ? `project_id=eq.${encodeURIComponent(projectId)}` : "",
     assetId ? `id=eq.${encodeURIComponent(assetId)}` : "",
+    categoryId ? `category_id=eq.${encodeURIComponent(categoryId)}` : "",
+    operationalStatus && isAssetOperationalStatus(operationalStatus) ? `operational_status=eq.${encodeURIComponent(operationalStatus)}` : "",
+    Number.isInteger(condition) && condition >= 1 && condition <= 5 ? `condition_rating=eq.${condition}` : "",
+    Number.isInteger(criticality) && criticality >= 1 && criticality <= 5 ? `criticality_rating=eq.${criticality}` : "",
+    "archived_at=is.null",
     search ? `or=${encodeURIComponent(`(asset_no.ilike.*${search}*,asset_type.ilike.*${search}*,project_name.ilike.*${search}*,building_name.ilike.*${search}*,floor_name.ilike.*${search}*,zone_name.ilike.*${search}*,office_name.ilike.*${search}*,surveyor_email.ilike.*${search}*)`)}` : "",
   ].filter(Boolean);
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
-  const query = `assets?select=id,asset_no,project_id,building_id,floor_id,zone_id,office_id,survey_config_id,created_by,project_name,building_name,floor_name,zone_name,office_name,additional_locations,surveyor_email,source_file_names,asset_type,summary,fields,warnings,raw_text,overall_confidence,condition_rating,condition_justification,criticality_rating,status,error,created_at&${filters.join("&")}${filters.length ? "&" : ""}order=created_at.desc`;
+  const query = `assets?select=${ASSET_SELECT}&${filters.join("&")}${filters.length ? "&" : ""}order=created_at.desc`;
   const { data: assets, count } = await supabaseRestWithCount<AssetRow[]>(query, token, { headers: { Range: `${from}-${to}` } });
   return {
     records: assets.map(asset => ({
@@ -172,6 +199,20 @@ async function listWorkspace(request: Request, token: string, viewerId: string) 
       conditionRating: asset.condition_rating,
       conditionJustification: asset.condition_justification || "",
       criticalityRating: asset.criticality_rating,
+      categoryId: asset.category_id || "",
+      operationalStatus: asset.operational_status || "active",
+      estimatedPrice: asset.estimated_price == null ? null : Number(asset.estimated_price),
+      replacementCost: asset.replacement_cost == null ? null : Number(asset.replacement_cost),
+      priceCurrency: asset.price_currency || "AED",
+      usefulLifeYears: asset.useful_life_years == null ? null : Number(asset.useful_life_years),
+      installationDate: asset.installation_date || "",
+      remainingLifeYears: asset.remaining_life_years == null ? null : Number(asset.remaining_life_years),
+      estimateSource: asset.estimate_source || "",
+      estimateConfidence: asset.estimate_confidence || "",
+      enrichmentData: asset.enrichment_data || {},
+      enrichmentSourceUrl: asset.enrichment_source_url || "",
+      enrichmentFetchedAt: asset.enrichment_fetched_at,
+      archivedAt: asset.archived_at,
       summary: asset.summary,
       manufacturer: listField(asset.fields, ["manufacturer", "brand", "make"]),
       model: listField(asset.fields, ["model", "modelnumber", "modelno"]),
@@ -250,6 +291,45 @@ function validatedCriticalityRating(raw: Record<string, unknown>) {
   return rating;
 }
 
+function optionalNumber(raw: unknown, label: string, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < minimum || value > maximum) throw new Error(`${label} is invalid.`);
+  return value;
+}
+
+function remainingLifeYears(usefulLifeYears: number | null, installationDate: string | null) {
+  if (usefulLifeYears == null || !installationDate) return null;
+  const installed = Date.parse(`${installationDate}T00:00:00Z`);
+  if (!Number.isFinite(installed)) return null;
+  const age = Math.max(0, (Date.now() - installed) / (365.2425 * 24 * 60 * 60 * 1000));
+  return Math.max(0, Number((usefulLifeYears - age).toFixed(2)));
+}
+
+function validatedLifecycle(raw: Record<string, unknown>) {
+  const operationalStatus = text(raw.operationalStatus, 40) || "active";
+  if (!isAssetOperationalStatus(operationalStatus)) throw new Error("Operational status is invalid.");
+  const installationDate = text(raw.installationDate, 20);
+  if (installationDate && !/^\d{4}-\d{2}-\d{2}$/.test(installationDate)) throw new Error("Installation date is invalid.");
+  return {
+    operationalStatus,
+    estimatedPrice: optionalNumber(raw.estimatedPrice, "Estimated price"),
+    replacementCost: optionalNumber(raw.replacementCost, "Replacement cost"),
+    priceCurrency: (text(raw.priceCurrency, 3) || "AED").toUpperCase().replace(/[^A-Z]/g, "") || "AED",
+    usefulLifeYears: optionalNumber(raw.usefulLifeYears, "Useful life", 0.01, 100),
+    installationDate: installationDate || null,
+    estimateSource: text(raw.estimateSource, 500),
+  };
+}
+
+async function validatedCategory(token: string, projectId: string, rawCategoryId: unknown) {
+  const categoryId = text(rawCategoryId, 80);
+  if (!categoryId) throw new Error("Asset category is required.");
+  const rows = await supabaseRest<CategoryRow[]>(`asset_categories?select=id,code,label_ar,label_en,color,icon,default_useful_life_years,default_estimated_price,currency,default_criticality_rating,technical_fields,active,project_asset_categories!inner(project_id,active)&id=eq.${encodeURIComponent(categoryId)}&active=eq.true&project_asset_categories.project_id=eq.${encodeURIComponent(projectId)}&project_asset_categories.active=eq.true&limit=1`, token);
+  if (!rows[0]) throw new Error("The selected asset category is not enabled for this project.");
+  return rows[0];
+}
+
 async function validatedLocation(token: string, raw: Record<string, unknown>) {
   const projectId = text(raw.projectId, 80);
   if (!projectId) throw new Error("Project is required.");
@@ -272,8 +352,9 @@ async function validatedLocation(token: string, raw: Record<string, unknown>) {
   } else floorName = text(raw.floor);
   if (zoneId) {
     if (!buildingId) throw new Error("Choose a building before the zone.");
-    const rows = await supabaseRest<NamedRow[]>(`zones?select=id,name&id=eq.${encodeURIComponent(zoneId)}&building_id=eq.${encodeURIComponent(buildingId)}&limit=1`, token);
+    const rows = await supabaseRest<ZoneRow[]>(`zones?select=id,name,floor_id&id=eq.${encodeURIComponent(zoneId)}&building_id=eq.${encodeURIComponent(buildingId)}&limit=1`, token);
     if (!rows[0]) throw new Error("The selected zone does not belong to this building.");
+    if (rows[0].floor_id && rows[0].floor_id !== floorId) throw new Error("The selected zone does not belong to this floor.");
     zoneName = rows[0].name;
   } else zoneName = text(raw.zone);
   if (officeId) {
@@ -290,13 +371,14 @@ async function validatedLocation(token: string, raw: Record<string, unknown>) {
   if (project.require_floor && !floorName) throw new Error("Floor is required for this project.");
   if (project.require_zone && !zoneName) throw new Error("Zone is required for this project.");
   if (project.require_office && !officeName) throw new Error("Office is required for this project.");
-  const locationLevels = await supabaseRest<LocationLevelRow[]>(`location_levels?select=id,level_key,label_ar,label_en,required,sort_order&project_id=eq.${encodeURIComponent(projectId)}&active=eq.true&order=sort_order`, token);
+  const locationLevels = await supabaseRest<LocationLevelRow[]>(`location_levels?select=id,level_key,label_ar,label_en,required,sort_order,parent_level_id&project_id=eq.${encodeURIComponent(projectId)}&active=eq.true&order=sort_order`, token);
   const submittedRows = Array.isArray(raw.additionalLocations) ? raw.additionalLocations.slice(0, 50).filter(item => item && typeof item === "object") as Record<string, unknown>[] : [];
   const allowedLevelIds = new Set(locationLevels.map(level => level.id));
   if (submittedRows.some(row => !allowedLevelIds.has(text(row.levelId, 80)))) throw new Error("A submitted location level is not configured for this project.");
   const levelIds = locationLevels.map(level => level.id);
-  const locationOptions = levelIds.length ? await supabaseRest<LocationOptionRow[]>(`location_options?select=id,level_id,building_id,floor_id,zone_id,name&level_id=in.(${levelIds.map(encodeURIComponent).join(",")})&active=eq.true&limit=5000`, token) : [];
-  const additionalLocations: DynamicLocationValue[] = locationLevels.flatMap(level => {
+  const locationOptions = levelIds.length ? await supabaseRestAll<LocationOptionRow>(`location_options?select=id,level_id,building_id,floor_id,zone_id,office_id,parent_option_id,name&level_id=in.(${levelIds.map(encodeURIComponent).join(",")})&active=eq.true`, token) : [];
+  const additionalLocations: DynamicLocationValue[] = [];
+  for (const level of locationLevels) {
     const submitted = submittedRows.find(row => text(row.levelId, 80) === level.id || text(row.key, 64) === level.level_key);
     const valueId = text(submitted?.valueId, 80);
     const option = valueId ? locationOptions.find(item => item.id === valueId && item.level_id === level.id) : undefined;
@@ -304,12 +386,16 @@ async function validatedLocation(token: string, raw: Record<string, unknown>) {
     if (option?.building_id && option.building_id !== buildingId) throw new Error(`${level.label_en || level.label_ar} does not belong to this building.`);
     if (option?.floor_id && option.floor_id !== floorId) throw new Error(`${level.label_en || level.label_ar} does not belong to this floor.`);
     if (option?.zone_id && option.zone_id !== zoneId) throw new Error(`${level.label_en || level.label_ar} does not belong to this zone.`);
-    const manualValue = valueId ? "" : text(submitted?.value, 300);
-    if (manualValue && !project.allow_manual) throw new Error(`Manual ${level.label_en || level.label_ar} values are not allowed for this project.`);
+    if (option?.office_id && option.office_id !== officeId) throw new Error(`${level.label_en || level.label_ar} does not belong to this office.`);
+    const preceding = level.parent_level_id ? additionalLocations.find(item => item.levelId === level.parent_level_id) : undefined;
+    if (level.parent_level_id && option && (!preceding?.valueId || option.parent_option_id !== preceding.valueId)) throw new Error(`${level.label_en || level.label_ar} does not belong to the selected preceding level.`);
+    const manualValue = valueId ? "" : level.level_key === "office" && officeId ? officeName : text(submitted?.value, 300);
+    if (manualValue && !project.allow_manual && !(level.level_key === "office" && officeId)) throw new Error(`Manual ${level.label_en || level.label_ar} values are not allowed for this project.`);
     const finalValue = option?.name || manualValue;
+    if (level.parent_level_id && finalValue && !preceding?.value) throw new Error(`${level.label_en || level.label_ar} requires a value for its preceding level.`);
     if (level.required && !finalValue) throw new Error(`${level.label_en || level.label_ar} is required.`);
-    return finalValue ? [{ levelId: level.id, key: level.level_key, labelAr: level.label_ar, labelEn: level.label_en, valueId: option?.id || "", value: finalValue }] : [];
-  });
+    if (finalValue) additionalLocations.push({ levelId: level.id, key: level.level_key, labelAr: level.label_ar, labelEn: level.label_en, valueId: option?.id || "", value: finalValue });
+  }
   return { projectId, projectName: project.name, buildingId: buildingId || null, buildingName, floorId: floorId || null, floorName, zoneId: zoneId || null, zoneName, officeId: officeId || null, officeName, additionalLocations };
 }
 
@@ -372,9 +458,9 @@ export async function GET(request: Request) {
     const token = requestToken(request); const user = await verifyAuthUser(token);
     if (!user) return Response.json({ error: "Authentication required." }, { status: 401 });
     const view = new URL(request.url).searchParams.get("view");
-    const selectedModule = view === "transfer" ? "transfers" : view === "list" ? "reports" : "capture";
+    const selectedModule = view === "transfer" ? "transfers" : view === "list" ? "reports" : view === "manage" ? "locations" : "capture";
     if (!await hasModuleAccess(token, user.id, selectedModule)) return Response.json({ error: "Your account cannot access this asset module." }, { status: 403 });
-    const payload = view === "queue" ? await queueWorkspace(token, user.id) : view === "list" || view === "transfer" ? await listWorkspace(request, token, user.id) : await workspace(token, user.id);
+    const payload = view === "queue" ? await queueWorkspace(token, user.id) : view === "list" || view === "transfer" || view === "manage" ? await listWorkspace(request, token, user.id) : await workspace(token, user.id);
     return Response.json(payload, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Unable to load the asset register." }, { status: 500 });
@@ -392,6 +478,8 @@ export async function POST(request: Request) {
       if (text(body.action, 40) !== "createManual") return Response.json({ error: "Unsupported asset action." }, { status: 400 });
       const context = body.context && typeof body.context === "object" && !Array.isArray(body.context) ? body.context as Record<string, unknown> : {};
       const location = await validatedLocation(token, context);
+      const category = await validatedCategory(token, location.projectId, context.categoryId);
+      const lifecycle = validatedLifecycle(context);
       const conditionRating = validatedConditionRating(context);
       const conditionJustification = validatedConditionJustification(context, conditionRating);
       const criticalityRating = validatedCriticalityRating(context);
@@ -411,6 +499,14 @@ export async function POST(request: Request) {
       ];
       const baseAsset = {
         project_id: location.projectId, building_id: location.buildingId, floor_id: location.floorId, zone_id: location.zoneId, office_id: location.officeId, survey_config_id: custom.configId,
+        category_id: category.id, operational_status: lifecycle.operationalStatus,
+        estimated_price: lifecycle.estimatedPrice ?? category.default_estimated_price,
+        replacement_cost: lifecycle.replacementCost,
+        price_currency: lifecycle.priceCurrency || category.currency || "AED",
+        useful_life_years: lifecycle.usefulLifeYears ?? category.default_useful_life_years,
+        installation_date: lifecycle.installationDate,
+        remaining_life_years: remainingLifeYears(lifecycle.usefulLifeYears ?? (category.default_useful_life_years == null ? null : Number(category.default_useful_life_years)), lifecycle.installationDate),
+        estimate_source: lifecycle.estimateSource || `Category default: ${category.label_en}`,
         project_name: location.projectName, building_name: location.buildingName, floor_name: location.floorName, zone_name: location.zoneName, office_name: location.officeName, additional_locations: location.additionalLocations,
         created_by: user.id, surveyor_email: user.email, source_file_names: [], asset_type: assetType,
         summary: text(body.summary, 1000) || `Manual ${assetType} record`, fields: manualFields, warnings: [], raw_text: "", overall_confidence: 1, condition_rating: conditionRating, condition_justification: conditionJustification, criticality_rating: criticalityRating, status: "review", error: null,
@@ -441,6 +537,8 @@ export async function POST(request: Request) {
     try { context = JSON.parse(text(form.get("context"), 50_000)) as Record<string, unknown>; }
     catch { return Response.json({ error: "Asset location data is invalid." }, { status: 400 }); }
     const location = await validatedLocation(token, context);
+    const category = await validatedCategory(token, location.projectId, context.categoryId);
+    const lifecycle = validatedLifecycle(context);
     const conditionRating = validatedConditionRating(context);
     const conditionJustification = validatedConditionJustification(context, conditionRating);
     const criticalityRating = validatedCriticalityRating(context);
@@ -455,6 +553,14 @@ export async function POST(request: Request) {
     }
     const baseAsset = {
       project_id: location.projectId, building_id: location.buildingId, floor_id: location.floorId, zone_id: location.zoneId, office_id: location.officeId, survey_config_id: custom.configId,
+      category_id: category.id, operational_status: lifecycle.operationalStatus,
+      estimated_price: lifecycle.estimatedPrice ?? category.default_estimated_price,
+      replacement_cost: lifecycle.replacementCost,
+      price_currency: lifecycle.priceCurrency || category.currency || "AED",
+      useful_life_years: lifecycle.usefulLifeYears ?? category.default_useful_life_years,
+      installation_date: lifecycle.installationDate,
+      remaining_life_years: remainingLifeYears(lifecycle.usefulLifeYears ?? (category.default_useful_life_years == null ? null : Number(category.default_useful_life_years)), lifecycle.installationDate),
+      estimate_source: lifecycle.estimateSource || `Category default: ${category.label_en}`,
       project_name: location.projectName, building_name: location.buildingName, floor_name: location.floorName, zone_name: location.zoneName, office_name: location.officeName, additional_locations: location.additionalLocations,
       created_by: user.id, surveyor_email: user.email, source_file_names: images.map(image => image.name), condition_rating: conditionRating, condition_justification: conditionJustification, criticality_rating: criticalityRating, status: "queued",
     };
@@ -474,7 +580,11 @@ export async function POST(request: Request) {
     const imageRows = await Promise.all(images.map(async (image, index) => {
       const path = `${user.id}/${assetId}/${String(index + 1).padStart(2, "0")}-${crypto.randomUUID()}.${extension(image)}`;
       await uploadAssetImage(path, token, image); uploadedPaths.push(path);
-      return { asset_id: assetId, storage_path: path, file_name: image.name, mime_type: image.type, size_bytes: image.size, sort_order: index };
+      return {
+        asset_id: assetId, storage_path: path, file_name: image.name, mime_type: image.type, size_bytes: image.size, sort_order: index,
+        image_role: index === 0 ? "nameplate" : "asset",
+        delete_after: index === 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+      };
     }));
     await supabaseRest("asset_images", token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(imageRows) });
     await supabaseRest("analysis_jobs", token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ asset_id: assetId, created_by: user.id, status: "queued" }) });
@@ -497,8 +607,22 @@ export async function PATCH(request: Request) {
     const profiles = await supabaseRest<Array<{ role: string }>>(`app_users?select=role&user_id=eq.${encodeURIComponent(user.id)}&active=eq.true&limit=1`, token);
     const profile = profiles[0];
     if (!profile) return Response.json({ error: "This account is disabled or unauthorized." }, { status: 403 });
-    const body = await request.json() as { id?: unknown; result?: Partial<AnalysisResult>; action?: unknown; projectId?: unknown; buildingId?: unknown; floorId?: unknown; zoneId?: unknown; officeId?: unknown; additionalLocations?: unknown; customValues?: unknown };
+    const body = await request.json() as { id?: unknown; result?: Partial<AnalysisResult>; action?: unknown; projectId?: unknown; buildingId?: unknown; floorId?: unknown; zoneId?: unknown; officeId?: unknown; building?: unknown; floor?: unknown; zone?: unknown; office?: unknown; additionalLocations?: unknown; customValues?: unknown; assetType?: unknown; summary?: unknown; manufacturer?: unknown; model?: unknown; serial?: unknown; categoryId?: unknown; operationalStatus?: unknown; conditionRating?: unknown; conditionJustification?: unknown; criticalityRating?: unknown; estimatedPrice?: unknown; replacementCost?: unknown; priceCurrency?: unknown; usefulLifeYears?: unknown; installationDate?: unknown; estimateSource?: unknown };
     const id = text(body.id, 80); const action = text(body.action, 30);
+    if (action === "amendLocation") {
+      if (!await hasModuleAccess(token, user.id, "locations", "edit") && !await hasModuleAccess(token, user.id, "reports", "edit")) return Response.json({ error: "Asset edit permission is required." }, { status: 403 });
+      const currentRows = await supabaseRest<Array<{ project_id: string; created_by: string; status: string }>>(`assets?select=project_id,created_by,status&id=eq.${encodeURIComponent(id)}&limit=1`, token);
+      const current = currentRows[0];
+      if (!current || !canEditAsset(profile.role, current.created_by, user.id)) return Response.json({ error: "Asset is unavailable for editing." }, { status: 403 });
+      if (current.status !== "review") return Response.json({ error: "Location correction here is available for assets awaiting review." }, { status: 409 });
+      const changes: Record<string, string> = {};
+      for (const key of ["building", "floor", "zone", "office"] as const) {
+        if (body[key] !== undefined) changes[`${key}_name`] = text(body[key], 200);
+      }
+      if (!Object.keys(changes).length) return Response.json({ error: "Enter a location to update." }, { status: 400 });
+      await supabaseRest(`assets?id=eq.${encodeURIComponent(id)}`, token, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(changes) });
+      return Response.json({ updated: true, id }, { headers: { "Cache-Control": "no-store" } });
+    }
     if (action === "transfer") {
       if (!await hasModuleAccess(token, user.id, "transfers", "edit")) return Response.json({ error: "Asset transfer permission is required." }, { status: 403 });
       if (!id) return Response.json({ error: "Asset id is required." }, { status: 400 });
@@ -530,6 +654,61 @@ export async function PATCH(request: Request) {
         }),
       });
       return Response.json(await queueWorkspace(token, user.id));
+    }
+    if (action === "manage") {
+      if (!await hasModuleAccess(token, user.id, "locations", "edit")) return Response.json({ error: "Asset management edit permission is required." }, { status: 403 });
+      if (!id) return Response.json({ error: "Asset id is required." }, { status: 400 });
+      const currentRows = await supabaseRest<Array<{ project_id: string; created_by: string; fields: AnalysisResult["fields"] }>>(`assets?select=project_id,created_by,fields&id=eq.${encodeURIComponent(id)}&limit=1`, token);
+      const current = currentRows[0];
+      if (!current) return Response.json({ error: "Asset was not found or is not accessible." }, { status: 404 });
+      if (!canEditAsset(profile.role, current.created_by, user.id)) return Response.json({ error: "Your role cannot edit this asset." }, { status: 403 });
+      const category = await validatedCategory(token, current.project_id, body.categoryId);
+      const lifecycle = validatedLifecycle(body as Record<string, unknown>);
+      const conditionRating = validatedConditionRating(body as Record<string, unknown>);
+      const conditionJustification = validatedConditionJustification(body as Record<string, unknown>, conditionRating);
+      const criticalityRating = validatedCriticalityRating(body as Record<string, unknown>);
+      const assetType = text(body.assetType, 200);
+      if (!assetType) return Response.json({ error: "Asset type is required." }, { status: 400 });
+      const aliases = {
+        manufacturer: ["manufacturer", "brand", "make"],
+        model: ["model", "modelnumber", "modelno"],
+        serial: ["serial", "serialnumber", "serialno", "sn"],
+      };
+      const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const nextFields = [...(current.fields || [])];
+      const setCoreField = (name: keyof typeof aliases, label: string, raw: unknown) => {
+        const value = text(raw, 500);
+        const index = nextFields.findIndex(field => aliases[name].includes(normalize(field.key)) || aliases[name].includes(normalize(field.label)));
+        if (index >= 0) nextFields[index] = { ...nextFields[index], value };
+        else if (value) nextFields.push({ key: name === "model" ? "modelNumber" : name === "serial" ? "serialNumber" : "manufacturer", label, value, confidence: 1 });
+      };
+      setCoreField("manufacturer", "Manufacturer / Brand", body.manufacturer);
+      setCoreField("model", "Model Number", body.model);
+      setCoreField("serial", "Serial Number", body.serial);
+      const duplicate = await findDuplicateWarning(token, id, nextFields);
+      const currentWarnings = await supabaseRest<Array<{ warnings: string[] }>>(`assets?select=warnings&id=eq.${encodeURIComponent(id)}&limit=1`, token);
+      const warnings = Array.from(new Set([...(currentWarnings[0]?.warnings || []).filter(item => !item.startsWith("Duplicate serial detected:")), ...(duplicate ? [duplicate] : [])]));
+      await supabaseRest(`assets?id=eq.${encodeURIComponent(id)}`, token, {
+        method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
+          asset_type: assetType,
+          summary: text(body.summary, 1000),
+          fields: nextFields,
+          warnings,
+          category_id: category.id,
+          operational_status: lifecycle.operationalStatus,
+          condition_rating: conditionRating,
+          condition_justification: conditionJustification,
+          criticality_rating: criticalityRating,
+          estimated_price: lifecycle.estimatedPrice,
+          replacement_cost: lifecycle.replacementCost,
+          price_currency: lifecycle.priceCurrency,
+          useful_life_years: lifecycle.usefulLifeYears,
+          installation_date: lifecycle.installationDate,
+          remaining_life_years: remainingLifeYears(lifecycle.usefulLifeYears, lifecycle.installationDate),
+          estimate_source: lifecycle.estimateSource,
+        }),
+      });
+      return Response.json({ updated: true, id }, { headers: { "Cache-Control": "no-store" } });
     }
     const result = body.result;
     const allowedAction = action === "approve"

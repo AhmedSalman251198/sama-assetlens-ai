@@ -1,7 +1,9 @@
-import { requestToken, supabaseRest, verifyAuthUser } from "../../lib/server/supabase";
+import { createHash } from "node:crypto";
+import { requestToken, supabaseRest, supabaseRestAll, verifyAuthUser } from "../../lib/server/supabase";
 import { moduleAccessFor, hasModuleAccess } from "../../lib/server/module-access";
 import { canUseModule } from "../../lib/module-permissions";
 import type { AnalysisField } from "../../lib/server/analyze-images";
+import { importedOperationalStatus, importedRating, incompleteImportFields } from "../../lib/import-normalization";
 
 export const runtime = "nodejs";
 
@@ -10,6 +12,8 @@ type AssetRow = {
   project_name: string; building_name: string; floor_name: string; zone_name: string; office_name: string; additional_locations: DynamicLocationValue[]; surveyor_email: string;
   source_file_names: string[]; asset_type: string; summary: string; fields: AnalysisField[]; warnings: string[];
   overall_confidence: number; condition_rating: number | null; condition_justification: string; criticality_rating: number | null; status: string; error: string | null; created_at: string;
+  category_id: string | null; operational_status: string; estimated_price: number | null; replacement_cost: number | null; price_currency: string; useful_life_years: number | null; remaining_life_years: number | null;
+  asset_categories?: { label_ar: string; label_en: string } | null;
   latitude?: number | null; longitude?: number | null; gps_accuracy_m?: number | null; barcode?: string; captured_offline?: boolean; device_captured_at?: string | null;
 };
 type ProjectRow = { id: string; name: string; require_building: boolean; require_floor: boolean; require_zone: boolean; require_office: boolean };
@@ -18,12 +22,15 @@ type CustomFieldRow = { id: string; config_id: string; field_key: string; label_
 type CustomValueRow = { asset_id: string; custom_field_id: string; value_text: string };
 type AssignmentRow = { app_user_id: string; project_id: string };
 type DynamicLocationValue = { levelId: string; key: string; labelAr: string; labelEn: string; valueId: string; value: string };
-type LocationLevelRow = { id: string; project_id: string; label_ar: string; label_en: string; required: boolean };
+type LocationLevelRow = { id: string; project_id: string; level_key: string; label_ar: string; label_en: string; required: boolean };
 type ActorRow = { id: string; role: "admin" | "project_manager" | "reviewer" | "surveyor" | "viewer"; active: boolean };
 type ImportRow = {
   assetNo?: unknown; assetType?: unknown; manufacturer?: unknown; model?: unknown; serial?: unknown; summary?: unknown;
-  building?: unknown; floor?: unknown; zone?: unknown; office?: unknown; customValues?: unknown;
+  building?: unknown; floor?: unknown; zone?: unknown; office?: unknown; customValues?: unknown; categoryId?: unknown;
+  conditionRating?: unknown; conditionJustification?: unknown; criticalityRating?: unknown; operationalStatus?: unknown; sourceSheet?: unknown; sourceRow?: unknown;
+  extraFields?: unknown; duplicateInFile?: unknown;
 };
+type CategoryRow = { id: string; label_ar: string; label_en: string; active: boolean };
 
 function text(value: unknown, max = 300) { return typeof value === "string" || typeof value === "number" ? String(value).trim().slice(0, max) : ""; }
 function normalized(value: string) { return value.toLowerCase().replace(/[^a-z0-9]/g, ""); }
@@ -42,23 +49,23 @@ async function actor(token: string, userId: string) {
 }
 
 async function reportAssets(token: string, projectFilter: string) {
-  const baseFields = "id,asset_no,project_id,survey_config_id,created_by,project_name,building_name,floor_name,zone_name,office_name,additional_locations,surveyor_email,source_file_names,asset_type,summary,fields,warnings,overall_confidence,condition_rating,condition_justification,criticality_rating,status,error,created_at";
+  const baseFields = "id,asset_no,project_id,survey_config_id,created_by,project_name,building_name,floor_name,zone_name,office_name,additional_locations,surveyor_email,source_file_names,asset_type,summary,fields,warnings,overall_confidence,condition_rating,condition_justification,criticality_rating,status,error,created_at,category_id,operational_status,estimated_price,replacement_cost,price_currency,useful_life_years,remaining_life_years,asset_categories(label_ar,label_en)";
   try {
-    return await supabaseRest<AssetRow[]>(`assets?select=${baseFields},latitude,longitude,gps_accuracy_m,barcode,captured_offline,device_captured_at&${projectFilter}&order=created_at.desc&limit=10000`, token);
+    return await supabaseRestAll<AssetRow>(`assets?select=${baseFields},latitude,longitude,gps_accuracy_m,barcode,captured_offline,device_captured_at&${projectFilter}&order=created_at.desc`, token);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (!/schema cache|column.*(latitude|longitude|gps_accuracy_m|barcode|captured_offline|device_captured_at)/i.test(message)) throw error;
-    return supabaseRest<AssetRow[]>(`assets?select=${baseFields}&${projectFilter}&order=created_at.desc&limit=10000`, token);
+    return supabaseRestAll<AssetRow>(`assets?select=${baseFields}&${projectFilter}&order=created_at.desc`, token);
   }
 }
 
 async function reportCustomFields(token: string) {
   try {
-    return await supabaseRest<CustomFieldRow[]>("custom_fields?select=id,config_id,field_key,label_ar,label_en,required,enabled,asset_types,unit,show_in_reports&enabled=eq.true&order=sort_order&limit=10000", token);
+    return await supabaseRestAll<CustomFieldRow>("custom_fields?select=id,config_id,field_key,label_ar,label_en,required,enabled,asset_types,unit,show_in_reports&enabled=eq.true&order=sort_order", token, { maxRows: 20_000 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (!/schema cache|column.*(asset_types|unit|show_in_reports)/i.test(message)) throw error;
-    return supabaseRest<CustomFieldRow[]>("custom_fields?select=id,config_id,field_key,label_ar,label_en,required,enabled&enabled=eq.true&order=sort_order&limit=10000", token);
+    return supabaseRestAll<CustomFieldRow>("custom_fields?select=id,config_id,field_key,label_ar,label_en,required,enabled&enabled=eq.true&order=sort_order", token, { maxRows: 20_000 });
   }
 }
 
@@ -79,12 +86,13 @@ async function reportData(token: string, profile: ActorRow, viewerId: string) {
     projectFilter = `project_id=in.(${assignedIds.map(encodeURIComponent).join(",")})`;
   }
 
-  const [assets, projects, customFields, customValues, locationLevels] = await Promise.all([
+  const [assets, projects, customFields, customValues, locationLevels, categories] = await Promise.all([
     reportAssets(token, projectFilter),
     supabaseRest<ProjectRow[]>(`projects?select=id,name,require_building,require_floor,require_zone,require_office&active=eq.true&${projectFilter}&order=name`, token),
     reportCustomFields(token),
-    supabaseRest<CustomValueRow[]>("asset_custom_values?select=asset_id,custom_field_id,value_text&limit=20000", token),
-    supabaseRest<LocationLevelRow[]>("location_levels?select=id,project_id,label_ar,label_en,required&active=eq.true&order=sort_order", token),
+    supabaseRestAll<CustomValueRow>("asset_custom_values?select=asset_id,custom_field_id,value_text", token),
+    supabaseRest<LocationLevelRow[]>("location_levels?select=id,project_id,level_key,label_ar,label_en,required&active=eq.true&order=sort_order", token),
+    supabaseRest<CategoryRow[]>("asset_categories?select=id,label_ar,label_en,active&active=eq.true&order=sort_order,label_en", token).catch(() => []),
   ]);
   const projectById = new Map(projects.map(project => [project.id, project]));
   const fieldById = new Map(customFields.map(field => [field.id, field]));
@@ -125,6 +133,8 @@ async function reportData(token: string, profile: ActorRow, viewerId: string) {
       sourceFiles: asset.source_file_names || [], assetType: asset.asset_type, summary: asset.summary, manufacturer, model, serial,
       fields: asset.fields || [], customValues: custom, warnings: asset.warnings || [], confidence: Number(asset.overall_confidence) || 0,
       status: asset.status, conditionRating: asset.condition_rating, conditionJustification: asset.condition_justification || "", criticalityRating: asset.criticality_rating, error: asset.error || "", createdAt: asset.created_at, isDuplicate: duplicateWarning(asset.warnings), missingFields,
+      categoryId: asset.category_id || "", categoryAr: asset.asset_categories?.label_ar || "", categoryEn: asset.asset_categories?.label_en || "", operationalStatus: asset.operational_status || "active",
+      estimatedPrice: asset.estimated_price == null ? null : Number(asset.estimated_price), replacementCost: asset.replacement_cost == null ? null : Number(asset.replacement_cost), priceCurrency: asset.price_currency || "AED", usefulLifeYears: asset.useful_life_years == null ? null : Number(asset.useful_life_years), remainingLifeYears: asset.remaining_life_years == null ? null : Number(asset.remaining_life_years),
       barcode: asset.barcode || "", latitude: asset.latitude ?? null, longitude: asset.longitude ?? null,
       gpsAccuracy: asset.gps_accuracy_m ?? null, capturedOffline: asset.captured_offline || false, deviceCapturedAt: asset.device_captured_at || "",
       canEdit: profile.role === "admin" || profile.role === "project_manager" || profile.role === "reviewer" || (profile.role === "surveyor" && asset.created_by === viewerId),
@@ -132,7 +142,7 @@ async function reportData(token: string, profile: ActorRow, viewerId: string) {
       canDelete: profile.role === "admin" || (profile.role === "surveyor" && asset.created_by === viewerId),
     };
   });
-  return { currentUser: { role: profile?.role || "surveyor" }, projects: projects.map(project => ({ id: project.id, name: project.name })), records };
+  return { currentUser: { role: profile?.role || "surveyor" }, projects: projects.map(project => ({ id: project.id, name: project.name })), categories: categories.map(category => ({ id: category.id, labelAr: category.label_ar, labelEn: category.label_en })), records };
 }
 
 export async function GET(request: Request) {
@@ -155,48 +165,109 @@ export async function POST(request: Request) {
     if (!await hasModuleAccess(token, user.id, "reports", "create")) return Response.json({ error: "Report import permission is required." }, { status: 403 });
     const profile = await actor(token, user.id);
     if (!profile) return Response.json({ error: "This account is disabled or unauthorized." }, { status: 403 });
-    const body = await request.json() as { action?: unknown; projectId?: unknown; fileName?: unknown; rows?: unknown };
+    const body = await request.json() as { action?: unknown; projectId?: unknown; fileName?: unknown; rows?: unknown; finalize?: unknown };
     if (body.action !== "importLegacy") return Response.json({ error: "Unsupported reporting action." }, { status: 400 });
     if (profile.role !== "admin") return Response.json({ error: "Only an administrator can import a legacy register." }, { status: 403 });
-    const projectId = text(body.projectId, 80); const rows = Array.isArray(body.rows) ? body.rows.slice(0, 500) as ImportRow[] : [];
+    if (Array.isArray(body.rows) && body.rows.length > 250) return Response.json({ error: "Import batches must contain at most 250 rows. No rows were saved." }, { status: 413 });
+    const projectId = text(body.projectId, 80); const rows = Array.isArray(body.rows) ? body.rows as ImportRow[] : [];
     if (!projectId || !rows.length) return Response.json({ error: "Choose a project and a non-empty Excel file." }, { status: 400 });
-    const [projects, configs, allFields, existingAssets] = await Promise.all([
+    const [projects, configs, allFields, existingAssets, projectCategories, importLocationLevels] = await Promise.all([
       supabaseRest<ProjectRow[]>(`projects?select=id,name,require_building,require_floor,require_zone,require_office&id=eq.${encodeURIComponent(projectId)}&active=eq.true&limit=1`, token),
       supabaseRest<ConfigRow[]>(`survey_config_versions?select=id,project_id,status&project_id=eq.${encodeURIComponent(projectId)}&status=eq.published&limit=1`, token),
       reportCustomFields(token),
-      supabaseRest<Array<{ fields: AnalysisField[] }>>("assets?select=fields&limit=10000", token),
+      supabaseRestAll<{ fields: AnalysisField[] }>(`assets?select=fields&project_id=eq.${encodeURIComponent(projectId)}`, token),
+      supabaseRest<Array<{ category_id: string }>>(`project_asset_categories?select=category_id&project_id=eq.${encodeURIComponent(projectId)}&active=eq.true`, token),
+      supabaseRest<LocationLevelRow[]>(`location_levels?select=id,project_id,level_key,label_ar,label_en,required&project_id=eq.${encodeURIComponent(projectId)}&active=eq.true&order=sort_order`, token),
     ]);
     const project = projects[0]; const config = configs[0];
     if (!project || !config) return Response.json({ error: "The selected project or its published form is unavailable." }, { status: 409 });
     const knownSerials = new Set(existingAssets.map(asset => normalized(fieldValue(asset.fields, ["serial", "serialNumber", "serialNo", "sn"]))).filter(Boolean));
+    const allowedCategoryIds = new Set(projectCategories.map(item => item.category_id));
     const batchSerials = new Set<string>();
-    const prepared = rows.map((row, index) => {
-      const assetType = text(row.assetType) || "Legacy asset"; const manufacturer = text(row.manufacturer); const model = text(row.model); const serial = text(row.serial); const serialKey = normalized(serial);
-      const duplicate = Boolean(serialKey && (knownSerials.has(serialKey) || batchSerials.has(serialKey))); if (serialKey) batchSerials.add(serialKey);
+    const rejected: Array<{ row: number; sheet: string; reason: string }> = [];
+    const prepared: Array<Record<string, unknown>> = [];
+    const sourceByFingerprint = new Map<string, ImportRow>();
+    rows.forEach((row, index) => {
+      const sourceRow = Number(row.sourceRow) || index + 2; const sourceSheet = text(row.sourceSheet, 120) || "Sheet";
+      const assetType = text(row.assetType) || text(row.summary) || "Unclassified Asset"; const manufacturer = text(row.manufacturer); const model = text(row.model); const serial = text(row.serial); const serialKey = normalized(serial);
+      const requestedCategory = text(row.categoryId, 80); const categoryId = allowedCategoryIds.has(requestedCategory) ? requestedCategory : null;
+      const conditionJustification = text(row.conditionJustification, 1000);
+      const rawCondition = importedRating(row.conditionRating);
+      const conditionRating = rawCondition !== null && rawCondition <= 2 && conditionJustification.length < 3 ? null : rawCondition;
+      const criticalityRating = importedRating(row.criticalityRating);
+      const missing = incompleteImportFields({ ...row, categoryId, conditionRating, criticalityRating }, { building: project.require_building, floor: project.require_floor, zone: project.require_zone, office: project.require_office });
+      const duplicateSerial = Boolean(serialKey && (knownSerials.has(serialKey) || batchSerials.has(serialKey) || row.duplicateInFile === true));
+      if (serialKey) batchSerials.add(serialKey);
+      const extraFields = row.extraFields && typeof row.extraFields === "object" && !Array.isArray(row.extraFields) ? Object.entries(row.extraFields as Record<string, unknown>) : [];
+      if (extraFields.length > 200) { rejected.push({ row: sourceRow, sheet: sourceSheet, reason: "More than 200 additional columns were found. Split this file by column group so no fields are lost." }); return; }
       const fields: AnalysisField[] = [
         manufacturer && { key: "manufacturer", label: "Manufacturer", value: manufacturer, confidence: 1 },
         model && { key: "modelNumber", label: "Model Number", value: model, confidence: 1 },
         serial && { key: "serialNumber", label: "Serial Number", value: serial, confidence: 1 },
         text(row.assetNo) && { key: "legacyAssetNo", label: "Legacy Asset Number", value: text(row.assetNo), confidence: 1 },
+        ...extraFields.map(([label, value]) => text(value, 1000) && ({ key: `source_${normalized(label).slice(0, 48) || "field"}`, label: text(label, 120), value: text(value, 1000), confidence: 1 })).filter(Boolean),
       ].filter(Boolean) as AnalysisField[];
-      return {
+      const additionalLocations = importLocationLevels.map(level => {
+        const aliases = [level.level_key, level.label_ar, level.label_en].map(normalized);
+        const match = extraFields.find(([label]) => aliases.includes(normalized(label)));
+        const value = text(match?.[1] ?? (level.level_key === "office" ? row.office : undefined), 300);
+        return value ? { levelId: level.id, key: level.level_key, labelAr: level.label_ar, labelEn: level.label_en, valueId: "", value } : null;
+      }).filter(Boolean);
+      for (const level of importLocationLevels) if (level.required && !additionalLocations.some(item => item?.levelId === level.id)) missing.push(level.label_en || level.label_ar || level.level_key);
+      if (rawCondition !== null && conditionRating === null) fields.push({ key: "sourceConditionRating", label: "Source condition rating (requires justification)", value: String(rawCondition), confidence: 1 });
+      const importFingerprint = createHash("sha256").update(JSON.stringify({
+        projectId, sourceSheet, sourceRow, assetNo: text(row.assetNo), assetType, manufacturer, model, serial,
+        building: text(row.building), floor: text(row.floor), zone: text(row.zone), office: text(row.office), extraFields,
+      })).digest("hex");
+      prepared.push({
         project_id: projectId, survey_config_id: config.id, created_by: user.id, project_name: project.name,
-        building_name: text(row.building), floor_name: text(row.floor), zone_name: text(row.zone), office_name: text(row.office), surveyor_email: user.email,
-        source_file_names: [text(body.fileName, 200) || "legacy-register.xlsx"], asset_type: assetType, summary: text(row.summary, 1000) || `Imported legacy asset ${index + 1}`,
-        fields, warnings: ["Imported from legacy Excel — verify source data.", ...(duplicate ? [`Duplicate serial detected: ${serial}`] : [])],
-        raw_text: "", overall_confidence: 1, condition_rating: null, criticality_rating: 3, status: "review", error: null,
-      };
+        building_name: text(row.building), floor_name: text(row.floor), zone_name: text(row.zone), office_name: text(row.office), additional_locations: additionalLocations, surveyor_email: user.email,
+        source_file_names: [text(body.fileName, 200) || "legacy-register.xlsx"], asset_type: assetType, summary: text(row.summary, 1000) || `Imported asset from ${sourceSheet} row ${sourceRow}`,
+        fields, warnings: ["Imported from spreadsheet — verify source data.", ...(missing.length ? [`Incomplete import — fill in: ${Array.from(new Set(missing)).join(", ")}`] : []), ...(duplicateSerial ? [`Duplicate serial detected for review: ${serial}`] : [])],
+        category_id: categoryId, operational_status: importedOperationalStatus(row.operationalStatus),
+        raw_text: "", overall_confidence: 0, condition_rating: conditionRating, condition_justification: conditionJustification, criticality_rating: criticalityRating, status: "review", error: null, import_fingerprint: importFingerprint,
+      });
+      sourceByFingerprint.set(importFingerprint, row);
     });
-    const inserted = await supabaseRest<Array<{ id: string }>>("assets", token, { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(prepared) });
+    if (!prepared.length) {
+      if (body.finalize === true) {
+        const report = await reportData(token, profile, user.id);
+        const access = await moduleAccessFor(token, user.id);
+        return Response.json({ imported: 0, skipped: 0, rejected, report: { ...report, currentUser: { ...report.currentUser, modulePermissions: access?.permissions || [] } } });
+      }
+      return Response.json({ imported: 0, skipped: 0, rejected });
+    }
+    const inserted = await supabaseRest<Array<{ id: string; import_fingerprint: string }>>("assets?on_conflict=import_fingerprint&select=id,import_fingerprint", token, { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=representation" }, body: JSON.stringify(prepared) });
     const fieldsForConfig = allFields.filter(field => field.config_id === config.id);
+    // Backfill custom values on retry as well: an earlier request could have
+    // stored asset rows but timed out before the related value inserts.
+    const assetIds = [...inserted];
+    if (fieldsForConfig.length && inserted.length < prepared.length) {
+      const fingerprints = prepared.map(item => String(item.import_fingerprint));
+      for (let offset = 0; offset < fingerprints.length; offset += 50) {
+        const batch = fingerprints.slice(offset, offset + 50);
+        const found = await supabaseRest<Array<{ id: string; import_fingerprint: string }>>(`assets?select=id,import_fingerprint&import_fingerprint=in.(${batch.join(",")})`, token);
+        assetIds.push(...found);
+      }
+    }
     const customRows: Array<{ asset_id: string; custom_field_id: string; value_text: string }> = [];
-    inserted.forEach((asset, index) => {
-      const values = rows[index]?.customValues && typeof rows[index].customValues === "object" && !Array.isArray(rows[index].customValues) ? rows[index].customValues as Record<string, unknown> : {};
-      for (const field of fieldsForConfig) { const value = text(values[field.field_key], 1000); if (value) customRows.push({ asset_id: asset.id, custom_field_id: field.id, value_text: value }); }
+    new Map(assetIds.map(asset => [asset.import_fingerprint, asset])).forEach(asset => {
+      const source = sourceByFingerprint.get(asset.import_fingerprint);
+      const values = source?.customValues && typeof source.customValues === "object" && !Array.isArray(source.customValues) ? source.customValues as Record<string, unknown> : {};
+      const extras = source?.extraFields && typeof source.extraFields === "object" && !Array.isArray(source.extraFields) ? source.extraFields as Record<string, unknown> : {};
+      for (const field of fieldsForConfig) {
+        const aliases = [field.field_key, field.label_ar, field.label_en].map(normalized);
+        const extraMatch = Object.entries(extras).find(([label]) => aliases.includes(normalized(label)));
+        const value = text(values[field.field_key] ?? extraMatch?.[1], 1000);
+        if (value) customRows.push({ asset_id: asset.id, custom_field_id: field.id, value_text: value });
+      }
     });
-    if (customRows.length) await supabaseRest("asset_custom_values", token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(customRows) });
+    for (let offset = 0; offset < customRows.length; offset += 500) {
+      await supabaseRest("asset_custom_values?on_conflict=asset_id,custom_field_id", token, { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(customRows.slice(offset, offset + 500)) });
+    }
+    if (body.finalize !== true) return Response.json({ imported: inserted.length, skipped: prepared.length - inserted.length, rejected }, { status: 201 });
     const report = await reportData(token, profile, user.id);
     const access = await moduleAccessFor(token, user.id);
-    return Response.json({ imported: inserted.length, report: { ...report, currentUser: { ...report.currentUser, modulePermissions: access?.permissions || [] } } }, { status: 201 });
+    return Response.json({ imported: inserted.length, skipped: prepared.length - inserted.length, rejected, report: { ...report, currentUser: { ...report.currentUser, modulePermissions: access?.permissions || [] } } }, { status: 201 });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "The legacy register could not be imported." }, { status: 500 }); }
 }

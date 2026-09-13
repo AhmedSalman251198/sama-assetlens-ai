@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import AppShell from "./components/app-shell";
 import "./globals.css";
+import "./assistant.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://assetlens-ai.vercel.app"),
@@ -29,7 +30,7 @@ export const viewport = { width: "device-width", initialScale: 1, viewportFit: "
 const developmentCacheReset = `
 (() => {
   if (!("serviceWorker" in navigator) || !("caches" in window)) return;
-  const marker = "assetlens_dev_cache_reset_16_3_0";
+  const marker = "assetlens_dev_cache_reset_19_0_0";
   Promise.all([navigator.serviceWorker.getRegistrations(), caches.keys()]).then(async ([registrations, keys]) => {
     const assetlensWorkers = registrations.filter(registration => {
       const worker = registration.active || registration.waiting || registration.installing;

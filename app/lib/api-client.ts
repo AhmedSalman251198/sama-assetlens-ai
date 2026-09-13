@@ -3,7 +3,7 @@
 import { getAccessToken } from "./supabase-auth";
 
 type CacheEntry = { value: unknown; savedAt: number };
-type ApiGetOptions = { ttlMs?: number; force?: boolean };
+type ApiGetOptions = { ttlMs?: number; force?: boolean; timeoutMs?: number };
 
 const responseCache = new Map<string, CacheEntry>();
 const inFlight = new Map<string, Promise<unknown>>();
@@ -36,13 +36,13 @@ function cacheKey(subject: string, url: string) {
   return `${subject}::${url}`;
 }
 
-async function fetchJson<T>(url: string, token: string, key: string) {
+async function fetchJson<T>(url: string, token: string, key: string, timeoutMs: number) {
   const existing = inFlight.get(key);
   if (existing) return existing as Promise<T>;
 
   const request = (async () => {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
     try {
       response = await fetch(url, {
@@ -90,7 +90,8 @@ export async function apiGet<T>(url: string, options: ApiGetOptions = {}) {
   const cached = responseCache.get(key);
   const ttlMs = Math.max(0, options.ttlMs ?? 60_000);
   if (!options.force && cached && Date.now() - cached.savedAt <= ttlMs) return cached.value as T;
-  return fetchJson<T>(url, token, key);
+  const timeoutMs = Math.max(5_000, Math.min(options.timeoutMs ?? 30_000, 120_000));
+  return fetchJson<T>(url, token, key, timeoutMs);
 }
 
 export function prefetchApi(url: string, ttlMs = 60_000) {

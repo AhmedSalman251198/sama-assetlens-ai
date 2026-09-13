@@ -26,6 +26,20 @@ function supabaseAdminSettings() {
   return { url, serviceKey };
 }
 
+export function assertSupabaseAdminConfigured() {
+  supabaseAdminSettings();
+}
+
+export async function supabaseAdminRest<T>(path: string, init: RequestInit = {}) {
+  const { url, serviceKey } = supabaseAdminSettings();
+  const response = await fetch(`${url}/rest/v1/${path}`, {
+    ...init,
+    signal: timedSignal(init.signal),
+    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", ...(init.headers || {}) },
+  });
+  return parseResponse<T>(response);
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
   const responseText = await response.text();
   let payload: T | { message?: string; details?: string; error_description?: string } | undefined;
@@ -65,6 +79,52 @@ export async function supabaseRest<T>(path: string, token: string, init: Request
     headers: { apikey: key, Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init.headers || {}) },
   });
   return parseResponse<T>(response);
+}
+
+export async function supabasePublicRest<T>(path: string, init: RequestInit = {}) {
+  const { url, key } = supabaseSettings();
+  const response = await fetch(`${url}/rest/v1/${path}`, {
+    ...init,
+    signal: timedSignal(init.signal),
+    headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...(init.headers || {}) },
+  });
+  return parseResponse<T>(response);
+}
+
+/**
+ * Reads a PostgREST collection without silently stopping at the server's
+ * configured max-row limit. Supabase commonly caps every response at 1,000
+ * rows even when a larger Range was requested, so advance by the number of
+ * rows actually received and probe once at the configured safety ceiling.
+ */
+export async function supabaseRestAll<T>(
+  path: string,
+  token: string,
+  options: { pageSize?: number; maxRows?: number; signal?: AbortSignal } = {},
+) {
+  const pageSize = Math.min(Math.max(Math.trunc(options.pageSize || 1000), 1), 1000);
+  const maxRows = Math.min(Math.max(Math.trunc(options.maxRows || 100_000), 1), 100_000);
+  const rows: T[] = [];
+  let from = 0;
+
+  while (from < maxRows) {
+    const to = Math.min(from + pageSize - 1, maxRows - 1);
+    const batch = await supabaseRest<T[]>(path, token, {
+      headers: { Range: `${from}-${to}` },
+      signal: options.signal,
+    });
+    if (!batch.length) return rows;
+    if (batch.length > to - from + 1) throw new Error("Supabase pagination returned an invalid page size.");
+    rows.push(...batch);
+    from += batch.length;
+  }
+
+  const overflow = await supabaseRest<T[]>(path, token, {
+    headers: { Range: `${maxRows}-${maxRows}` },
+    signal: options.signal,
+  });
+  if (overflow.length) throw new Error(`The result exceeds the safe export limit of ${maxRows.toLocaleString("en-US")} rows. Narrow the project filter and try again.`);
+  return rows;
 }
 
 export async function supabaseRestWithCount<T>(path: string, token: string, init: RequestInit = {}) {
@@ -118,6 +178,17 @@ export async function updateSupabaseUserPassword(userId: string, password: strin
   await parseResponse<Record<string, unknown>>(response);
 }
 
+export async function updateSupabaseUserIdentity(userId: string, email: string, name: string) {
+  const { url, serviceKey } = supabaseAdminSettings();
+  const response = await fetch(`${url}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PUT",
+    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ email: email.toLowerCase(), email_confirm: true, user_metadata: { name } }),
+    signal: timedSignal(undefined),
+  });
+  await parseResponse<Record<string, unknown>>(response);
+}
+
 function encodedStoragePath(path: string) {
   return path.split("/").map(encodeURIComponent).join("/");
 }
@@ -152,6 +223,18 @@ export async function deleteAssetImages(paths: string[], token: string) {
   const response = await fetch(`${url}/storage/v1/object/asset-images`, {
     method: "DELETE",
     headers: { apikey: key, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ prefixes: paths }),
+    signal: timedSignal(undefined, 20_000),
+  });
+  await parseResponse<Record<string, unknown>>(response);
+}
+
+export async function deleteAssetImagesAdmin(paths: string[]) {
+  if (paths.length === 0) return;
+  const { url, serviceKey } = supabaseAdminSettings();
+  const response = await fetch(`${url}/storage/v1/object/asset-images`, {
+    method: "DELETE",
+    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ prefixes: paths }),
     signal: timedSignal(undefined, 20_000),
   });

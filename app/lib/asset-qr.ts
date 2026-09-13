@@ -2,7 +2,7 @@ export type AssetQrField = { label: string; value: string };
 
 export type AssetQrPayload = {
   kind: "assetlens-asset";
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   assetId: string;
   assetNo: string;
   snapshotAt: string;
@@ -31,6 +31,14 @@ export type AssetQrSource = {
   status?: string;
   conditionRating?: number | null;
   criticalityRating?: number | null;
+  operationalStatus?: string;
+  category?: string;
+  estimatedPrice?: number | null;
+  replacementCost?: number | null;
+  priceCurrency?: string;
+  usefulLifeYears?: number | null;
+  remainingLifeYears?: number | null;
+  enrichmentData?: Record<string, unknown>;
   confidence?: number;
   latitude?: number | null;
   longitude?: number | null;
@@ -43,11 +51,12 @@ export type AssetQrSource = {
   additionalLocations?: QrLocationValue[];
 };
 
+const STABLE_PREFIX = "alqr3";
 const CURRENT_PREFIX = "alqr2";
 const LEGACY_PREFIX = "alqr1";
-const DIRECT_TEXT_PREFIX = "ASSETLENS-OFFLINE-V2";
+const DIRECT_TEXT_PREFIX = "ASSETLENS ASSET V2";
+const LEGACY_DIRECT_TEXT_PREFIX = "ASSETLENS-OFFLINE-V2";
 const CRITICALITY_LABELS = ["", "Very Low", "Low", "Important", "High", "Critical"];
-type CompactPayloadV2 = ["a", 2, string, string, string, Array<[string, string]>];
 
 function text(value: unknown) {
   if (value === null || value === undefined) return "";
@@ -78,44 +87,33 @@ function coreFieldValue(source: AssetQrSource, names: string[]) {
   })?.value;
 }
 
-function fieldCharacters(fields: AssetQrField[]) {
-  return fields.reduce((total, field) => total + field.label.length + field.value.length + 3, 0);
-}
-
 export function buildAssetQrPayload(source: AssetQrSource): AssetQrPayload {
   const fields: AssetQrField[] = [];
   const seen = new Set<string>();
-  addField(fields, seen, "Asset ID", source.id);
-  addField(fields, seen, "Asset Number", source.assetNo);
-  addField(fields, seen, "Asset Type", source.assetType || coreFieldValue(source, ["assetName", "assetType", "equipmentName"]));
-  addField(fields, seen, "Manufacturer", source.manufacturer || coreFieldValue(source, ["manufacturer", "brand", "make"]));
+  addField(fields, seen, "ID", source.id);
+  addField(fields, seen, "No", source.assetNo);
+  addField(fields, seen, "Type", source.assetType || coreFieldValue(source, ["assetName", "assetType", "equipmentName"]));
+  addField(fields, seen, "Make", source.manufacturer || coreFieldValue(source, ["manufacturer", "brand", "make"]));
   addField(fields, seen, "Model", source.model || coreFieldValue(source, ["modelNumber", "modelNo", "model"]));
-  addField(fields, seen, "Serial Number", source.serial || coreFieldValue(source, ["serialNumber", "serialNo", "serial", "sn"]));
-  addField(fields, seen, "Barcode", source.barcode);
-  if (Number.isInteger(source.conditionRating) && Number(source.conditionRating) >= 1 && Number(source.conditionRating) <= 5) addField(fields, seen, "Asset Condition Rating", `${source.conditionRating}/5`);
+  addField(fields, seen, "Serial", source.serial || coreFieldValue(source, ["serialNumber", "serialNo", "serial", "sn"]));
+  addField(fields, seen, "Category", source.category);
+  if (Number.isInteger(source.conditionRating) && Number(source.conditionRating) >= 1 && Number(source.conditionRating) <= 5) addField(fields, seen, "Condition", `${source.conditionRating}/5`);
   if (Number.isInteger(source.criticalityRating) && Number(source.criticalityRating) >= 1 && Number(source.criticalityRating) <= 5) {
     const criticality = Number(source.criticalityRating);
-    addField(fields, seen, "Asset Criticality", `${CRITICALITY_LABELS[criticality]} (Weight ${criticality})`);
+    addField(fields, seen, "Criticality", `${CRITICALITY_LABELS[criticality]} (W${criticality})`);
   }
+  addField(fields, seen, "Operating", source.operationalStatus);
   addField(fields, seen, "Project", source.project);
-  addField(fields, seen, "Building / Site", source.building);
+  addField(fields, seen, "Building", source.building);
   addField(fields, seen, "Floor", source.floor);
   addField(fields, seen, "Zone", source.zone);
-  addField(fields, seen, "Office / Room", source.office);
-  for (const location of (source.additionalLocations || []).slice(0, 5)) addField(fields, seen, location.labelAr || location.labelEn || location.key || "Location", location.value);
-  // Custom fields shown in QR are administrator-selected business data. Keep a
-  // strict budget so long notes never turn the printed code into an unreadable matrix.
-  for (const field of source.customValues || []) {
-    if (fields.length >= 18 || fieldCharacters(fields) >= 850) break;
-    addField(fields, seen, field.labelAr || field.labelEn || field.key || "Custom Field", field.value);
-  }
+  addField(fields, seen, "Room", source.office);
+  // Keep printed codes deliberately compact and dependable. Financial,
+  // enrichment, audit, surveyor and timestamp data remain in Supabase and do
+  // not make the physical symbol unnecessarily dense.
   if (!text(source.id)) throw new Error("Asset ID is required before creating an offline QR.");
   if (fields.length <= 2) throw new Error("The database record does not contain enough asset data to create an offline QR.");
   return { kind: "assetlens-asset", version: 2, assetId: source.id, assetNo: source.assetNo, snapshotAt: "", fields };
-}
-
-function compactPayload(payload: AssetQrPayload): CompactPayloadV2 {
-  return ["a", 2, payload.assetId, payload.assetNo, payload.snapshotAt, payload.fields.map(field => [field.label, field.value])];
 }
 
 function expandCompactPayload(value: unknown): AssetQrPayload | null {
@@ -145,7 +143,7 @@ export function createAssetQrText(payload: AssetQrPayload) {
 
 function parseDirectText(value: string): AssetQrPayload | null {
   const lines = value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  if (lines[0] !== DIRECT_TEXT_PREFIX) return null;
+  if (lines[0] !== DIRECT_TEXT_PREFIX && lines[0] !== LEGACY_DIRECT_TEXT_PREFIX) return null;
   const fields: AssetQrField[] = [];
   let snapshotAt = "";
   for (const line of lines.slice(1)) {
@@ -157,18 +155,10 @@ function parseDirectText(value: string): AssetQrPayload | null {
     if (label === "Snapshot At") snapshotAt = fieldValue;
     else fields.push({ label, value: fieldValue });
   }
-  const assetId = fields.find(field => field.label === "Asset ID")?.value || "";
-  const assetNo = fields.find(field => field.label === "Asset Number")?.value || "";
+  const assetId = fields.find(field => field.label === "ID" || field.label === "Asset ID")?.value || "";
+  const assetNo = fields.find(field => field.label === "No" || field.label === "Asset Number")?.value || "";
   if (!assetId || !fields.length) throw new Error("Invalid AssetLens direct offline QR payload.");
   return { kind: "assetlens-asset", version: 2, assetId, assetNo, snapshotAt, fields };
-}
-
-function bytesToBase64Url(bytes: Uint8Array) {
-  let binary = "";
-  for (let index = 0; index < bytes.length; index += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function base64UrlToBytes(value: string) {
@@ -177,29 +167,20 @@ function base64UrlToBytes(value: string) {
   return Uint8Array.from(binary, character => character.charCodeAt(0));
 }
 
-function ownedArrayBuffer(bytes: Uint8Array) {
-  const buffer = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(buffer).set(bytes);
-  return buffer;
-}
-
-async function gzip(bytes: Uint8Array) {
-  if (typeof CompressionStream === "undefined") return null;
-  const stream = new Blob([ownedArrayBuffer(bytes)]).stream().pipeThrough(new CompressionStream("gzip"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
 async function gunzip(bytes: Uint8Array) {
   if (typeof DecompressionStream === "undefined") throw new Error("This device cannot unpack the offline QR payload.");
-  const stream = new Blob([ownedArrayBuffer(bytes)]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream("gzip"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-export async function createAssetQrValue(origin: string, payload: AssetQrPayload) {
-  const source = new TextEncoder().encode(JSON.stringify(compactPayload(payload)));
-  const compressed = await gzip(source);
-  const packed = `${CURRENT_PREFIX}.${compressed ? "g" : "j"}.${bytesToBase64Url(compressed || source)}`;
-  return `${origin.replace(/\/$/, "")}/scan#${packed}`;
+export async function createAssetQrValue(_origin: string, payload: AssetQrPayload) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.assetId)) throw new Error("A valid Asset ID is required before creating a stable QR.");
+  // R18 embeds the verified core snapshot again so any ordinary reader can
+  // show it immediately without a deployment, cache or network. AssetLens can
+  // still use the embedded immutable ID to refresh from Supabase when online.
+  return createAssetQrText(payload);
 }
 
 export async function parseAssetQrValue(rawValue: string): Promise<AssetQrPayload | null> {
@@ -211,6 +192,11 @@ export async function parseAssetQrValue(rawValue: string): Promise<AssetQrPayloa
     const url = new URL(clean);
     packed = url.hash.slice(1);
   } catch { /* The scanner may return the packed value without its URL. */ }
+  if (packed.startsWith(`${STABLE_PREFIX}.`)) {
+    const assetId = packed.slice(STABLE_PREFIX.length + 1);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(assetId)) throw new Error("Invalid AssetLens stable QR identifier.");
+    return { kind: "assetlens-asset", version: 3, assetId, assetNo: "", snapshotAt: "", fields: [{ label: "Asset ID", value: assetId }] };
+  }
   const [prefix, mode, encoded] = packed.split(".", 3);
   if ((prefix !== CURRENT_PREFIX && prefix !== LEGACY_PREFIX) || !encoded || (mode !== "g" && mode !== "j")) return null;
   const source = base64UrlToBytes(encoded);

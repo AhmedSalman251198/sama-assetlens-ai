@@ -32,7 +32,7 @@ function normalizeCell(value: ExcelCellValue) {
   return "";
 }
 
-function parseCsv(text: string, limit: number) {
+function parseDelimited(text: string, limit: number, delimiter: string) {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
@@ -46,7 +46,7 @@ function parseCsv(text: string, limit: number) {
       index += 1;
     } else if (character === '"') {
       quoted = !quoted;
-    } else if (character === "," && !quoted) {
+    } else if (character === delimiter && !quoted) {
       row.push(cell);
       cell = "";
     } else if ((character === "\n" || character === "\r") && !quoted) {
@@ -55,7 +55,9 @@ function parseCsv(text: string, limit: number) {
       rows.push(row);
       row = [];
       cell = "";
-      if (rows.length > limit) break;
+      // Keep the possible 30-line preamble and one overflow row. Never
+      // silently discard records from a large legacy register.
+      if (rows.length > limit + 31) break;
     } else {
       cell += character;
     }
@@ -65,15 +67,113 @@ function parseCsv(text: string, limit: number) {
     rows.push(row);
   }
 
-  const headers = (rows[0] || []).map(value => value.trim());
-  return rows.slice(1, limit + 1).map(values => Object.fromEntries(headers.map((header, index) => [header, values[index]?.trim() || ""])));
+  if (quoted) throw new Error("The CSV file has an unclosed quoted cell.");
+  return rows;
+}
+
+const HEADER_ALIASES = new Set([
+  "assetno", "assetnumber", "tagno", "رقمالأصل", "assettype", "equipmenttype", "نوعالأصل",
+  "manufacturer", "make", "brand", "الشركةالمصنعة", "model", "modelno", "modelnumber", "الموديل",
+  "serial", "serialno", "serialnumber", "sn", "الرقمالتسلسلي", "building", "site", "location", "المبنى", "الموقع",
+  "floor", "level", "الطابق", "zone", "area", "الزون", "المنطقة", "office", "room", "المكتب", "الغرفة",
+  "condition", "assetcondition", "حالةالأصل", "criticality", "importance", "الأهمية", "category", "assetcategory", "التصنيف",
+]);
+
+function normalizedHeader(value: string) {
+  return value.toLowerCase().replace(/[\s_\-/.()#:]+/g, "").trim();
+}
+
+function headerScore(row: string[]) {
+  const cells = row.map(cell => cell.trim()).filter(Boolean);
+  if (cells.length < 2) return -1;
+  const recognized = cells.filter(cell => HEADER_ALIASES.has(normalizedHeader(cell))).length;
+  const textCells = cells.filter(cell => !/^[-+]?\d+(\.\d+)?$/.test(cell)).length;
+  const unique = new Set(cells.map(normalizedHeader)).size;
+  // A wide data row must not beat a short but correctly recognized heading.
+  return (recognized ? 100 + recognized * 20 : 0) + textCells * 1.2 + unique * .5 - Math.max(0, cells.length - unique) * 2;
+}
+
+function uniqueHeaders(values: string[]) {
+  const used = new Map<string, number>();
+  return values.map((value, index) => {
+    const base = value.trim() || `Column ${index + 1}`;
+    const count = (used.get(base) || 0) + 1;
+    used.set(base, count);
+    return count === 1 ? base : `${base} (${count})`;
+  });
+}
+
+function inspectMatrix(matrix: string[][], sheet: string, limit: number, selectedHeaderRow?: number) {
+  const candidates = matrix.slice(0, Math.min(100, matrix.length));
+  let headerRow = 0;
+  let bestScore = -Infinity;
+  candidates.forEach((row, index) => {
+    const score = headerScore(row);
+    if (score > bestScore) { bestScore = score; headerRow = index; }
+  });
+  if (selectedHeaderRow !== undefined) {
+    if (!Number.isInteger(selectedHeaderRow) || selectedHeaderRow < 1 || selectedHeaderRow > matrix.length || !matrix[selectedHeaderRow - 1]?.some(value => value.trim())) {
+      throw new Error(`Sheet ${sheet}: choose a non-empty header row between 1 and ${matrix.length}.`);
+    }
+    headerRow = selectedHeaderRow - 1;
+  }
+  const headers = uniqueHeaders(matrix[headerRow] || []);
+  const dataRows = matrix.slice(headerRow + 1)
+    .map((values, index) => ({ values, sourceRow: headerRow + index + 2 }))
+    .filter(item => item.values.some(value => value.trim()));
+  if (dataRows.length > limit) throw new Error(`The spreadsheet contains more than ${limit.toLocaleString("en-US")} data rows. Split it by project and import each file separately.`);
+  const rows = dataRows
+    .map(item => ({
+      ...Object.fromEntries(headers.map((header, column) => [header, item.values[column]?.trim() || ""])),
+      __sheet: sheet,
+      __row: String(item.sourceRow),
+    }));
+  return { sheet, headerRow: headerRow + 1, headers, rows };
+}
+
+export type SpreadsheetInspection = {
+  sheets: Array<{ sheet: string; headerRow: number; headers: string[]; rowCount: number }>;
+  headers: string[];
+  rows: Record<string, string>[];
+};
+
+export async function inspectSpreadsheet(file: File, limit = 100_000, headerRows: Record<string, number> = {}): Promise<SpreadsheetInspection> {
+  const lowerName = file.name.toLowerCase();
+  if (lowerName.endsWith(".csv") || lowerName.endsWith(".tsv")) {
+    const source = await file.text();
+    const candidates = lowerName.endsWith(".tsv") ? ["\t"] : [",", ";", "\t"];
+    const delimiter = candidates.map(candidate => {
+      const sample = parseDelimited(source, 35, candidate).slice(0, 35);
+      return { candidate, score: Math.max(...sample.map(headerScore)) };
+    }).sort((left, right) => right.score - left.score)[0].candidate;
+    const inspected = inspectMatrix(parseDelimited(source, limit, delimiter), file.name, limit, headerRows[file.name]);
+    return { sheets: [{ sheet: inspected.sheet, headerRow: inspected.headerRow, headers: inspected.headers, rowCount: inspected.rows.length }], headers: inspected.headers, rows: inspected.rows };
+  }
+
+  if (lowerName.endsWith(".xls")) throw new Error("Legacy .xls files are not supported safely. Save the file as .xlsx or CSV and try again.");
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await file.arrayBuffer());
+  const inspectedSheets = workbook.worksheets.map(worksheet => {
+    const matrix: string[][] = [];
+    worksheet.eachRow({ includeEmpty: true }, row => {
+      const values = row.values as ExcelCellValue[];
+      const width = Math.max(0, values.length - 1);
+      matrix.push(Array.from({ length: width }, (_, index) => normalizeCell(row.getCell(index + 1).value as ExcelCellValue)));
+    });
+    return inspectMatrix(matrix, worksheet.name, limit, headerRows[worksheet.name]);
+  }).filter(sheet => sheet.rows.length > 0);
+  const headers = Array.from(new Set(inspectedSheets.flatMap(sheet => sheet.headers)));
+  const rows = inspectedSheets.flatMap(sheet => sheet.rows);
+  if (rows.length > limit) throw new Error(`The spreadsheet contains more than ${limit.toLocaleString("en-US")} data rows. Split it by project and import each file separately.`);
+  return { sheets: inspectedSheets.map(sheet => ({ sheet: sheet.sheet, headerRow: sheet.headerRow, headers: sheet.headers, rowCount: sheet.rows.length })), headers, rows };
 }
 
 export async function exportWorkbook(
   filename: string,
   sheets: Array<{ name: string; rows: ExcelRow[]; columns?: string[] }>
 ) {
-  const ExcelJS = await import("exceljs");
+  const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "AssetLens AI";
   workbook.created = new Date();
@@ -110,25 +210,5 @@ export async function exportWorkbook(
 }
 
 export async function readSpreadsheetRows(file: File, limit = 500) {
-  if (file.name.toLowerCase().endsWith(".csv")) {
-    return parseCsv(await file.text(), limit);
-  }
-
-  const ExcelJS = await import("exceljs");
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
-  const worksheet = workbook.worksheets[0];
-  if (!worksheet) return [];
-
-  const headers = (worksheet.getRow(1).values as ExcelCellValue[])
-    .slice(1)
-    .map(value => normalizeCell(value));
-  const rows: Record<string, string>[] = [];
-  const maxRow = Math.min(worksheet.rowCount, limit + 1);
-  for (let rowNumber = 2; rowNumber <= maxRow; rowNumber += 1) {
-    const worksheetRow = worksheet.getRow(rowNumber);
-    const row = Object.fromEntries(headers.map((header, index) => [header, normalizeCell(worksheetRow.getCell(index + 1).value as ExcelCellValue)]));
-    rows.push(row);
-  }
-  return rows;
+  return (await inspectSpreadsheet(file, limit)).rows;
 }

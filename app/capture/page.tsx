@@ -10,14 +10,18 @@ import { clearExpiredOfflineSubmissions, listOfflineSubmissions, loadDeviceConfi
 import { AssetQrPayload, parseAssetQrValue } from "../lib/asset-qr";
 import { ASSET_CONDITION_LEVELS, assetConditionLabel } from "../lib/asset-condition";
 import { ASSET_CRITICALITY_LEVELS, assetCriticalityLabel, assetCriticalityWeight } from "../lib/asset-criticality";
+import { ASSET_OPERATIONAL_STATUSES, AssetOperationalStatus } from "../lib/asset-operational-status";
+import { AssetCategory } from "../lib/asset-categories";
+import { canUseModule, ModulePermission } from "../lib/module-permissions";
+import { readUiLanguage, UI_LANGUAGE_EVENT } from "../lib/ui-preferences";
 
 type Language = "ar" | "en";
 type Field = { key: string; label: string; value: string; confidence: number };
-type Result = { assetType: string; summary: string; fields: Field[]; warnings: string[]; rawText: string; overallConfidence: number; conditionRating?: number | null; conditionJustification?: string; criticalityRating?: number | null };
+type Result = { assetType: string; summary: string; fields: Field[]; warnings: string[]; rawText: string; overallConfidence: number; conditionRating?: number | null; conditionJustification?: string; criticalityRating?: number | null; categoryId?: string; operationalStatus?: AssetOperationalStatus; estimatedPrice?: number | null; replacementCost?: number | null; priceCurrency?: string; usefulLifeYears?: number | null; installationDate?: string; remainingLifeYears?: number | null; estimateSource?: string; estimateConfidence?: string; enrichmentData?: Record<string, string>; enrichmentSourceUrl?: string };
 type CustomValue = { key: string; labelAr: string; labelEn: string; value: string; unit?: string };
 type GPSPosition = { latitude: number; longitude: number; accuracy: number; capturedAt: string };
 type DynamicLocationValue = { levelId: string; key: string; labelAr: string; labelEn: string; valueId: string; value: string };
-type SurveyContext = { projectId: string; project: string; buildingId: string; building: string; floorId: string; floor: string; zoneId: string; zone: string; officeId: string; office: string; additionalLocations?: DynamicLocationValue[]; conditionRating: number; conditionJustification: string; criticalityRating: number; surveyorEmail: string; customValues?: Record<string, string>; mobile?: { latitude: number | null; longitude: number | null; accuracy: number | null; capturedAt: string; barcode: string; capturedOffline: boolean; offlineClientId: string } };
+type SurveyContext = { projectId: string; project: string; buildingId: string; building: string; floorId: string; floor: string; zoneId: string; zone: string; officeId: string; office: string; additionalLocations?: DynamicLocationValue[]; categoryId: string; conditionRating: number; conditionJustification: string; criticalityRating: number; operationalStatus: AssetOperationalStatus; estimatedPrice: number | null; replacementCost: number | null; priceCurrency: string; usefulLifeYears: number | null; installationDate: string; estimateSource: string; surveyorEmail: string; customValues?: Record<string, string>; mobile?: { latitude: number | null; longitude: number | null; accuracy: number | null; capturedAt: string; barcode: string; capturedOffline: boolean; offlineClientId: string } };
 type InstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> };
 type BarcodeDetectorInstance = { detect: (source: ImageBitmapSource) => Promise<Array<{ rawValue: string }>> };
 type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => BarcodeDetectorInstance;
@@ -31,12 +35,12 @@ type MasterFloor = { id: string; name: string; sortOrder: number };
 type MasterZone = { id: string; floorId: string | null; name: string };
 type MasterOffice = { id: string; floorId: string | null; zoneId: string | null; name: string };
 type MasterBuilding = { id: string; name: string; floors: MasterFloor[]; zones: MasterZone[]; offices: MasterOffice[] };
-type MasterLocationOption = { id: string; buildingId: string | null; floorId: string | null; zoneId: string | null; name: string };
-type MasterLocationLevel = { id: string; key: string; labelAr: string; labelEn: string; required: boolean; sortOrder: number; options: MasterLocationOption[] };
+type MasterLocationOption = { id: string; buildingId: string | null; floorId: string | null; zoneId: string | null; officeId: string | null; parentOptionId: string | null; name: string };
+type MasterLocationLevel = { id: string; key: string; labelAr: string; labelEn: string; required: boolean; sortOrder: number; parentLevelId: string; options: MasterLocationOption[] };
 type CustomOption = { code: string; labelAr: string; labelEn: string };
 type CustomSurveyField = { id: string; key: string; labelAr: string; labelEn: string; type: "text" | "textarea" | "number" | "date" | "select" | "boolean"; required: boolean; options: CustomOption[]; sortOrder: number; helpAr: string; helpEn: string; assetTypes: string[]; unit: string; aiExtract: boolean; showInReports: boolean; showInQr: boolean };
-type MasterProject = { id: string; name: string; requireBuilding: boolean; requireFloor: boolean; requireZone: boolean; requireOffice: boolean; allowManual: boolean; buildings: MasterBuilding[]; locationLevels: MasterLocationLevel[]; customFields: CustomSurveyField[] };
-type MasterConfig = { currentUser: { email: string; name: string; role: "admin" | "project_manager" | "reviewer" | "surveyor" | "viewer" }; projects: MasterProject[] };
+type MasterProject = { id: string; name: string; requireBuilding: boolean; requireFloor: boolean; requireZone: boolean; requireOffice: boolean; allowManual: boolean; categoryIds: string[]; buildings: MasterBuilding[]; locationLevels: MasterLocationLevel[]; customFields: CustomSurveyField[] };
+type MasterConfig = { currentUser: { email: string; name: string; role: "admin" | "project_manager" | "reviewer" | "surveyor" | "viewer"; modulePermissions: ModulePermission[] }; projects: MasterProject[]; categories: AssetCategory[] };
 
 const SINGLE_ASSET_LIMIT = 5;
 const BULK_ZONE_LIMIT = 20;
@@ -46,7 +50,7 @@ const BULK_TOTAL_LIMIT_BYTES = BULK_ZONE_LIMIT * IMAGE_LIMIT_BYTES;
 
 const copy = {
   ar: {
-    tagline: "تحليل لوحات بيانات الأصول بالذكاء الاصطناعي", secure: "معالجة آمنة", version: "الإصدار R16.3",
+    tagline: "تحليل لوحات بيانات الأصول بالذكاء الاصطناعي", secure: "معالجة آمنة", version: "الإصدار R18",
     title: "حوّل صورة الـ Nameplate إلى بيانات منظمة",
     lead: "ارفع صورة واضحة للوحة البيانات، وسيستخرج النظام المعلومات الفنية تلقائيًا لتتمكن من مراجعتها وتصديرها.",
     uploadTitle: "التقط أو ارفع صور الأصل", uploadHint: "أرفق الـNameplate وصور الأصل من زوايا مختلفة", formats: "حتى 5 صور • تحسين تلقائي سريع قبل الرفع",
@@ -73,7 +77,7 @@ const copy = {
     online: "متصل", offline: "بدون إنترنت", installApp: "تثبيت التطبيق", syncNow: "مزامنة الآن", offlineSaved: "تم حفظ الأصل على الهاتف وسيُرفع تلقائيًا عند رجوع الإنترنت.", offlineQueue: "أصول محفوظة Offline", syncing: "جاري المزامنة", gps: "موقع GPS", captureGps: "التقاط الموقع", gpsReady: "تم التقاط الموقع", gpsRequired: "يجب التقاط GPS لهذا المشروع.", barcode: "QR / Barcode", scanBarcode: "مسح بالكاميرا", barcodePlaceholder: "امسح أو اكتب الكود", closeScanner: "إغلاق الكاميرا", scannerUnsupported: "المسح المباشر غير مدعوم في هذا المتصفح؛ اكتب الكود يدويًا.", removeOffline: "حذف النسخة المحلية",
   },
   en: {
-    tagline: "AI-powered asset nameplate analysis", secure: "Secure processing", version: "Release R16.3",
+    tagline: "AI-powered asset nameplate analysis", secure: "Secure processing", version: "Release R18",
     title: "Turn a nameplate photo into structured data",
     lead: "Upload a clear nameplate image and let the system extract technical information for review and export.",
     uploadTitle: "Capture or upload asset photos", uploadHint: "Add the nameplate and full asset views", formats: "Up to 5 images • automatically optimized before upload",
@@ -161,6 +165,13 @@ export default function Home() {
   const [conditionRating, setConditionRating] = useState<number | null>(null);
   const [conditionJustification, setConditionJustification] = useState("");
   const [criticalityRating, setCriticalityRating] = useState<number | null>(null);
+  const [categoryId, setCategoryId] = useState("");
+  const [operationalStatus, setOperationalStatus] = useState<AssetOperationalStatus>("active");
+  const [estimatedPrice, setEstimatedPrice] = useState("");
+  const [replacementCost, setReplacementCost] = useState("");
+  const [priceCurrency, setPriceCurrency] = useState("AED");
+  const [usefulLifeYears, setUsefulLifeYears] = useState("");
+  const [installationDate, setInstallationDate] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannedAsset, setScannedAsset] = useState<AssetQrPayload | null>(null);
   const [captureStep, setCaptureStep] = useState<1 | 2 | 3>(1);
@@ -176,6 +187,13 @@ export default function Home() {
   const prefillAppliedRef = useRef(false);
   const queuePollInFlightRef = useRef(false);
   const manualSubmissionIdRef = useRef("");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setLanguage(readUiLanguage()), 0);
+    const onLanguage = (event: Event) => setLanguage((event as CustomEvent<Language>).detail || readUiLanguage());
+    window.addEventListener(UI_LANGUAGE_EVENT, onLanguage);
+    return () => { window.clearTimeout(timer); window.removeEventListener(UI_LANGUAGE_EVENT, onLanguage); };
+  }, []);
 
   const compressImage = async (file: File, targetBytes: number): Promise<File> => {
     if (file.size <= targetBytes) return file;
@@ -215,6 +233,9 @@ export default function Home() {
   };
   const t = copy[language];
   const selectedProject = masterConfig?.projects.find(item => item.id === projectId);
+  const canApproveAssets = canUseModule(masterConfig?.currentUser.modulePermissions, "reports", "approve");
+  const projectCategories = (masterConfig?.categories || []).filter(category => category.active !== false && selectedProject?.categoryIds.includes(category.id));
+  const selectedCategory = projectCategories.find(category => category.id === categoryId);
   const selectedBuilding = selectedProject?.buildings.find(item => item.id === buildingId);
   const selectedFloor = selectedBuilding?.floors.find(item => item.id === floorId);
   const availableZones = selectedBuilding?.zones.filter(item => !item.floorId || !floorId || item.floorId === floorId) || [];
@@ -228,9 +249,12 @@ export default function Home() {
   const dynamicOptionsFor = (level: MasterLocationLevel) => level.options.filter(option =>
     (!option.buildingId || option.buildingId === buildingId) &&
     (!option.floorId || option.floorId === floorId) &&
-    (!option.zoneId || option.zoneId === zoneId)
+    (!option.zoneId || option.zoneId === zoneId) &&
+    (!option.officeId || option.officeId === officeId) &&
+    (!level.parentLevelId || (locationSelections[level.parentLevelId] && option.parentOptionId === locationSelections[level.parentLevelId]))
   );
   const additionalLocations: DynamicLocationValue[] = (selectedProject?.locationLevels || []).map(level => {
+    if (level.key === "office") return { levelId: level.id, key: level.key, labelAr: level.labelAr, labelEn: level.labelEn, valueId: "", value: officeValue };
     const selectedId = locationSelections[level.id] || "";
     const option = dynamicOptionsFor(level).find(item => item.id === selectedId);
     return { levelId: level.id, key: level.key, labelAr: level.labelAr, labelEn: level.labelEn, valueId: option?.id || "", value: selectedId === "__manual__" ? (manualLocationValues[level.id] || "").trim() : option?.name || "" };
@@ -242,6 +266,7 @@ export default function Home() {
   const assetFields = selectedProject?.customFields.filter(field => (field.assetTypes || []).some(type => type.trim().toLocaleLowerCase("en").replace(/\s+/g, " ") === activeAssetType)) || [];
   const reviewCustomFields = selectedProject?.customFields.filter(field => field.id !== gpsField?.id && field.id !== barcodeField?.id && ((field.assetTypes || []).length === 0 || (activeAssetType && (field.assetTypes || []).some(type => type.trim().toLocaleLowerCase("en").replace(/\s+/g, " ") === activeAssetType)))) || [];
   const editingRecord = records.find(record => record.id === editingRecordId);
+  const visibleJobs = useMemo(() => jobs.filter(job => job.status !== "completed" || records.some(record => record.id === job.assetId && record.status === "review")), [jobs, records]);
   const shouldQueueAsBulk = bulkMode && files.length > 0;
   const bulkRatingsComplete = !bulkMode || files.every((_, index) => {
     const rating = bulkRatings[index];
@@ -265,6 +290,21 @@ export default function Home() {
   const bulkSessionRecords = useMemo(() => records.filter(record => bulkSessionAssetIds.has(record.id)), [records, bulkSessionAssetIds]);
   const bulkSessionCompleted = bulkSessionRecords.filter(record => record.status === "completed" || record.status === "review").length;
 
+  const openRecordForReview = useCallback((record: StoredRecord) => {
+    setResult({ assetType: record.assetType, summary: record.summary, fields: record.fields, warnings: record.warnings, rawText: record.rawText, overallConfidence: record.overallConfidence, conditionRating: record.conditionRating, conditionJustification: record.conditionJustification, criticalityRating: record.criticalityRating, categoryId: record.surveyContext?.categoryId, operationalStatus: record.surveyContext?.operationalStatus, estimatedPrice: record.surveyContext?.estimatedPrice, replacementCost: record.surveyContext?.replacementCost, priceCurrency: record.surveyContext?.priceCurrency, usefulLifeYears: record.surveyContext?.usefulLifeYears, installationDate: record.surveyContext?.installationDate });
+    const values = Object.fromEntries((record.customValues || []).map(field => [field.key, field.value]));
+    const project = masterConfig?.projects.find(item => item.id === record.surveyContext?.projectId);
+    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+    for (const field of project?.customFields || []) {
+      if (!field.aiExtract || values[field.key]) continue;
+      const extracted = record.fields.find(item => normalize(item.key) === normalize(field.key) || normalize(item.label) === normalize(field.labelEn || field.labelAr));
+      if (extracted?.value) values[field.key] = extracted.value;
+    }
+    setCustomValues(values);
+    setEditingRecordId(record.id); setDemo(false); setCaptureStep(3); setError("");
+    window.setTimeout(() => document.querySelector(".result-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  }, [masterConfig]);
+
   const applyWorkspace = useCallback((payload: { records: StoredRecord[]; jobs: AnalysisJob[] }, announceCompletion = false) => {
     const newlyCompleted = announceCompletion ? payload.jobs.find(job => job.status === "completed" && !completedJobsRef.current.has(job.id)) : undefined;
     payload.jobs.filter(job => job.status === "completed").forEach(job => completedJobsRef.current.add(job.id));
@@ -275,21 +315,9 @@ export default function Home() {
     invalidateApiCache("/api/assets?view=transfer");
     if (newlyCompleted) {
       const record = payload.records.find(item => item.id === newlyCompleted.assetId);
-      if (record) {
-        setResult({ assetType: record.assetType, summary: record.summary, fields: record.fields, warnings: record.warnings, rawText: record.rawText, overallConfidence: record.overallConfidence, conditionRating: record.conditionRating, conditionJustification: record.conditionJustification, criticalityRating: record.criticalityRating });
-        const values = Object.fromEntries((record.customValues || []).map(field => [field.key, field.value]));
-        const project = masterConfig?.projects.find(item => item.id === record.surveyContext?.projectId);
-        const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
-        for (const field of project?.customFields || []) {
-          if (!field.aiExtract || values[field.key]) continue;
-          const extracted = record.fields.find(item => normalize(item.key) === normalize(field.key) || normalize(item.label) === normalize(field.labelEn || field.labelAr));
-          if (extracted?.value) values[field.key] = extracted.value;
-        }
-        setCustomValues(values);
-        setEditingRecordId(record.id); setDemo(false); setCaptureStep(3);
-      }
+      if (record) openRecordForReview(record);
     }
-  }, [masterConfig]);
+  }, [openRecordForReview]);
   const loadWorkspace = useCallback(async (announceCompletion = false) => {
     try {
       const payload = await apiGet<{ records: StoredRecord[]; jobs: AnalysisJob[]; error?: string }>("/api/assets?view=queue", { ttlMs: announceCompletion ? 0 : 5_000, force: announceCompletion });
@@ -310,13 +338,21 @@ export default function Home() {
     try {
       const asset = await parseAssetQrValue(value);
       if (asset) {
-        setScannedAsset(asset);
+        let currentAsset = asset;
+        if (navigator.onLine) {
+          try {
+            const response = await fetch(`/api/public/assets/${encodeURIComponent(asset.assetId)}`, { cache: "no-store" });
+            const latest = await response.json() as { payload?: typeof asset };
+            if (response.ok && latest.payload?.assetId === asset.assetId) currentAsset = latest.payload;
+          } catch { /* The embedded snapshot remains a complete offline fallback. */ }
+        }
+        setScannedAsset(currentAsset);
         setBarcode(asset.assetId);
         if (barcodeField?.key) setCustomValues(current => ({ ...current, [barcodeField.key]: asset.assetId }));
         return;
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "تعذر قراءة بيانات QR.");
+      setError(reason instanceof Error ? reason.message : (language === "ar" ? "تعذر قراءة بيانات QR." : "QR data could not be read."));
       return;
     }
     const clean = value.trim().slice(0, 200); setBarcode(clean);
@@ -466,7 +502,7 @@ export default function Home() {
   function clear() {
     previews.forEach(url => URL.revokeObjectURL(url));
     previewUrlsRef.current = previewUrlsRef.current.filter(url => !previews.includes(url));
-    setFiles([]); setPreviews([]); setBulkRatings([]); setResult(null); setDemo(false); setError(""); setEditingRecordId(null); setManualAsset({ assetType: "", summary: "", manufacturer: "", model: "", serial: "" }); setCustomValues({}); setGps(null); setBarcode(""); setConditionRating(null); setConditionJustification(""); setCriticalityRating(null); setCaptureStep(1); manualSubmissionIdRef.current = "";
+    setFiles([]); setPreviews([]); setBulkRatings([]); setResult(null); setDemo(false); setError(""); setEditingRecordId(null); setManualAsset({ assetType: "", summary: "", manufacturer: "", model: "", serial: "" }); setCustomValues({}); setGps(null); setBarcode(""); setCategoryId(""); setOperationalStatus("active"); setEstimatedPrice(""); setReplacementCost(""); setPriceCurrency("AED"); setUsefulLifeYears(""); setInstallationDate(""); setConditionRating(null); setConditionJustification(""); setCriticalityRating(null); setCaptureStep(1); manualSubmissionIdRef.current = "";
   }
   function resetCaptureForm() {
     clear();
@@ -536,7 +572,7 @@ export default function Home() {
     const requiredFields = selectedProject?.customFields.filter(field => (field.assetTypes || []).length === 0 || (activeAssetType && (field.assetTypes || []).some(type => type.trim().toLocaleLowerCase("en").replace(/\s+/g, " ") === activeAssetType))) || [];
     const submissionFieldsValid = requiredFields.every(field => !field.required || Boolean(submissionCustomValues[field.key]?.trim()));
     const dynamicLocationsValid = (selectedProject?.locationLevels || []).every(level => !level.required || Boolean(additionalLocations.find(item => item.levelId === level.id)?.value));
-    if (!selectedProject || !Number.isInteger(effectiveCondition) || Number(effectiveCondition) < 1 || Number(effectiveCondition) > 5 || (Number(effectiveCondition) <= 2 && effectiveJustification.length < 3) || !Number.isInteger(effectiveCriticality) || Number(effectiveCriticality) < 1 || Number(effectiveCriticality) > 5 || !Boolean((!selectedProject.requireBuilding || buildingValue) && (!selectedProject.requireFloor || floorValue) && (!selectedProject.requireZone || zoneValue) && (!selectedProject.requireOffice || officeValue) && dynamicLocationsValid && submissionFieldsValid)) return null;
+    if (!selectedProject || !categoryId || !projectCategories.some(category => category.id === categoryId) || !Number.isInteger(effectiveCondition) || Number(effectiveCondition) < 1 || Number(effectiveCondition) > 5 || (Number(effectiveCondition) <= 2 && effectiveJustification.length < 3) || !Number.isInteger(effectiveCriticality) || Number(effectiveCriticality) < 1 || Number(effectiveCriticality) > 5 || !Boolean((!selectedProject.requireBuilding || buildingValue) && (!selectedProject.requireFloor || floorValue) && (!selectedProject.requireZone || zoneValue) && (!selectedProject.requireOffice || officeValue) && dynamicLocationsValid && submissionFieldsValid)) return null;
     return {
       projectId: selectedProject.id, project: selectedProject.name,
       buildingId: buildingId === "__manual__" ? "" : buildingId, building: buildingValue,
@@ -544,8 +580,16 @@ export default function Home() {
       zoneId: zoneId === "__manual__" ? "" : zoneId, zone: zoneValue,
       officeId: officeId === "__manual__" ? "" : officeId, office: officeValue,
       additionalLocations: additionalLocations.filter(item => item.value),
+      categoryId,
       conditionRating: Number(effectiveCondition), conditionJustification: effectiveJustification,
       criticalityRating: Number(effectiveCriticality),
+      operationalStatus,
+      estimatedPrice: estimatedPrice ? Number(estimatedPrice) : null,
+      replacementCost: replacementCost ? Number(replacementCost) : null,
+      priceCurrency: priceCurrency || "AED",
+      usefulLifeYears: usefulLifeYears ? Number(usefulLifeYears) : null,
+      installationDate,
+      estimateSource: selectedCategory ? `Category default: ${selectedCategory.labelEn}` : "",
       surveyorEmail: masterConfig?.currentUser.email || "", customValues: submissionCustomValues,
       mobile: { latitude: position?.latitude ?? null, longitude: position?.longitude ?? null, accuracy: position?.accuracy ?? null, capturedAt: position?.capturedAt || new Date().toISOString(), barcode, capturedOffline, offlineClientId },
     };
@@ -581,7 +625,7 @@ export default function Home() {
       }
       await refreshOfflineQueue(); setOfflineNotice(shouldQueueAsBulk ? t.bulkQueued : t.offlineSaved);
       previews.forEach(url => URL.revokeObjectURL(url)); previewUrlsRef.current = previewUrlsRef.current.filter(url => !previews.includes(url));
-      setFiles([]); setPreviews([]); setBulkRatings([]); setResult(null); setDemo(false); setEditingRecordId(null); setCustomValues({}); setGps(null); setBarcode(""); setConditionRating(null); setConditionJustification(""); setCriticalityRating(null); setCaptureStep(1);
+      setFiles([]); setPreviews([]); setBulkRatings([]); setResult(null); setDemo(false); setEditingRecordId(null); setCustomValues({}); setGps(null); setBarcode(""); setCategoryId(""); setOperationalStatus("active"); setEstimatedPrice(""); setReplacementCost(""); setPriceCurrency("AED"); setUsefulLifeYears(""); setInstallationDate(""); setConditionRating(null); setConditionJustification(""); setCriticalityRating(null); setCaptureStep(1);
     };
     try {
       if (!navigator.onLine) { await saveForSync(); return; }
@@ -617,7 +661,7 @@ export default function Home() {
       }
       previews.forEach(url => URL.revokeObjectURL(url)); previewUrlsRef.current = previewUrlsRef.current.filter(url => !previews.includes(url));
       setFiles([]); setPreviews([]); setBulkRatings([]); setResult(null); setDemo(false); setEditingRecordId(null);
-      setCustomValues({}); setGps(null); setBarcode(""); setConditionRating(null); setConditionJustification(""); setCriticalityRating(null); setCaptureStep(1); if (!shouldQueueAsBulk) setOfflineNotice("");
+      setCustomValues({}); setGps(null); setBarcode(""); setCategoryId(""); setOperationalStatus("active"); setEstimatedPrice(""); setReplacementCost(""); setPriceCurrency("AED"); setUsefulLifeYears(""); setInstallationDate(""); setConditionRating(null); setConditionJustification(""); setCriticalityRating(null); setCaptureStep(1); if (!shouldQueueAsBulk) setOfflineNotice("");
     } catch (err) { setError(err instanceof Error ? err.message : t.failed); }
     finally { setUploading(false); }
   }
@@ -742,6 +786,7 @@ export default function Home() {
     const dynamicLocationsValid = (selectedProject?.locationLevels || []).every(level => !level.required || Boolean(additionalLocations.find(item => item.levelId === level.id)?.value));
     const locationReady = Boolean(selectedProject && (!selectedProject.requireBuilding || buildingValue) && (!selectedProject.requireFloor || floorValue) && (!selectedProject.requireZone || zoneValue) && (!selectedProject.requireOffice || officeValue) && dynamicLocationsValid && locationFields.every(field => !field.required || Boolean(customValues[field.key]?.trim())));
     if (!locationReady) { setError(t.contextRequired); return; }
+    if (!categoryId || !projectCategories.some(category => category.id === categoryId)) { setError(language === "ar" ? "اختر تصنيف الأصل قبل المتابعة." : "Choose the asset category before continuing."); return; }
     if (!Number.isInteger(conditionRating) || Number(conditionRating) < 1 || Number(conditionRating) > 5) { setError(language === "ar" ? "اختر تقييم حالة الأصل من المستويات الخمسة قبل المتابعة." : "Choose one of the five asset-condition levels before continuing."); return; }
     if (Number(conditionRating) <= 2 && conditionJustification.trim().length < 3) { setError(language === "ar" ? "اكتب سبب تقييم الأصل كحالة حرجة أو ضعيفة." : "Explain why the asset is Critical or Poor."); return; }
     if (!Number.isInteger(criticalityRating) || Number(criticalityRating) < 1 || Number(criticalityRating) > 5) { setError(language === "ar" ? "اختر درجة أهمية الأصل؛ وسيحدد النظام الوزن تلقائياً." : "Choose the asset criticality; its weight is assigned automatically."); return; }
@@ -752,7 +797,7 @@ export default function Home() {
     <main className="capture-page al-page" dir={language === "ar" ? "rtl" : "ltr"}>
       <header className="al-page-head capture-page-head">
         <div><span className="al-page-kicker">Mobile field capture</span><h2>{language === "ar" ? "التقط لوحة الأصل وحوّلها إلى بيانات" : "Capture a nameplate and turn it into data"}</h2><p>{language === "ar" ? "اختر الموقع، التقط صورة واضحة، ثم راجع البيانات المستخرجة قبل اعتمادها." : "Choose the location, capture a clear photo, then review the extracted data before approval."}</p></div>
-        <div className="al-page-actions"><button className="al-secondary-button" onClick={() => setLanguage(language === "ar" ? "en" : "ar")}>{language === "ar" ? "English" : "العربية"}</button><button className="al-primary-button" onClick={() => setSettingsOpen(true)}>⚙ {t.settings}</button></div>
+        <div className="al-page-actions"><button className="al-primary-button" onClick={() => setSettingsOpen(true)}>⚙ {t.settings}</button></div>
       </header>
       <section className={`mobile-status-bar ${isOnline ? "online" : "offline"}`} aria-live="polite">
         <div><i /> <strong>{isOnline ? t.online : t.offline}</strong>{offlineQueue.length > 0 && <span>{offlineQueue.length} {t.offlineQueue}</span>}</div>
@@ -763,15 +808,16 @@ export default function Home() {
       <nav className="capture-stepper" aria-label={language === "ar" ? "خطوات إضافة الأصل" : "Asset capture steps"}>{[language === "ar" ? "الموقع" : "Location", language === "ar" ? "الإضافة" : "Capture", language === "ar" ? "المراجعة" : "Review"].map((label, index) => <span key={label} className={captureStep >= index + 1 ? "active" : ""}><b>{index + 1}</b>{label}</span>)}</nav>
       {captureStep === 1 && <section className="survey-context" aria-labelledby="context-title">
         <div className="context-heading"><span>00</span><div><h2 id="context-title">{t.contextTitle}</h2><p>{t.contextLead}</p></div>{masterConfig?.currentUser.role === "admin" && <Link href="/admin">{t.adminPanel} ↗</Link>}</div>
-        {masterError ? <div className="context-message error">{masterError}</div> : !masterConfig ? <div className="context-message loading"><span className="loading-dots"><i /><i /><i /></span>{language === "ar" ? "جاري تحميل صلاحيات المشاريع…" : "Loading project permissions…"}</div> : masterConfig.projects.length === 0 ? <div className="context-message">لا توجد مشاريع مخصصة لهذا المستخدم. يرجى مراجعة المدير.</div> : <div className="context-grid">
-          <label><span>{t.project}<em>{t.required}</em></span><select value={projectId} onChange={event => { setProjectId(event.target.value); setBuildingId(""); setFloorId(""); setZoneId(""); setOfficeId(""); setManualBuilding(""); setManualFloor(""); setManualZone(""); setManualOffice(""); setLocationSelections({}); setManualLocationValues({}); setCustomValues({}); setGps(null); setBarcode(""); setConditionRating(null); setConditionJustification(""); setCriticalityRating(null); setBulkRatings([]); }}><option value="">{t.chooseValue}</option>{masterConfig.projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        {masterError ? <div className="context-message error">{masterError}</div> : !masterConfig ? <div className="context-message loading"><span className="loading-dots"><i /><i /><i /></span>{language === "ar" ? "جاري تحميل صلاحيات المشاريع…" : "Loading project permissions…"}</div> : masterConfig.projects.length === 0 ? <div className="context-message">{language === "ar" ? "لا توجد مشاريع مخصصة لهذا المستخدم. يرجى مراجعة المدير." : "No projects are assigned to this user. Contact an administrator."}</div> : <div className="context-grid">
+          <label><span>{t.project}<em>{t.required}</em></span><select value={projectId} onChange={event => { setProjectId(event.target.value); setBuildingId(""); setFloorId(""); setZoneId(""); setOfficeId(""); setManualBuilding(""); setManualFloor(""); setManualZone(""); setManualOffice(""); setLocationSelections({}); setManualLocationValues({}); setCustomValues({}); setGps(null); setBarcode(""); setCategoryId(""); setEstimatedPrice(""); setReplacementCost(""); setUsefulLifeYears(""); setInstallationDate(""); setConditionRating(null); setConditionJustification(""); setCriticalityRating(null); setBulkRatings([]); }}><option value="">{t.chooseValue}</option>{masterConfig.projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           {selectedProject && (selectedProject.requireBuilding || selectedProject.buildings.length > 0) && <label><span>{t.building}<em>{selectedProject.requireBuilding ? t.required : t.optional}</em></span><select value={buildingId} onChange={event => { setBuildingId(event.target.value); setFloorId(""); setZoneId(""); setOfficeId(""); setManualBuilding(""); setManualFloor(""); setManualZone(""); setManualOffice(""); setLocationSelections({}); setManualLocationValues({}); }}><option value="">{t.chooseValue}</option>{selectedProject.buildings.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}{selectedProject.allowManual && <option value="__manual__">{t.manualEntry}</option>}</select>{buildingId === "__manual__" && <input value={manualBuilding} onChange={event => setManualBuilding(event.target.value)} placeholder={t.enterManually} />}</label>}
           {selectedProject && buildingValue && (selectedProject.requireFloor || (selectedBuilding?.floors.length || 0) > 0) && <label><span>{t.floor}<em>{selectedProject.requireFloor ? t.required : t.optional}</em></span><select value={floorId} onChange={event => { setFloorId(event.target.value); setZoneId(""); setOfficeId(""); setManualFloor(""); setManualZone(""); setManualOffice(""); setLocationSelections({}); setManualLocationValues({}); }}><option value="">{t.chooseValue}</option>{selectedBuilding?.floors.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}{selectedProject.allowManual && <option value="__manual__">{t.manualEntry}</option>}</select>{floorId === "__manual__" && <input value={manualFloor} onChange={event => setManualFloor(event.target.value)} placeholder={t.enterManually} />}</label>}
           {selectedProject && buildingValue && (selectedProject.requireZone || availableZones.length > 0) && <label><span>{t.zone}<em>{selectedProject.requireZone ? t.required : t.optional}</em></span><select value={zoneId} onChange={event => { setZoneId(event.target.value); setOfficeId(""); setManualZone(""); setManualOffice(""); setLocationSelections({}); setManualLocationValues({}); }}><option value="">{t.chooseValue}</option>{availableZones.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}{selectedProject.allowManual && <option value="__manual__">{t.manualEntry}</option>}</select>{zoneId === "__manual__" && <input value={manualZone} onChange={event => setManualZone(event.target.value)} placeholder={t.enterManually} />}</label>}
-          {selectedProject && buildingValue && (selectedProject.locationLevels || []).map(level => {
+          {selectedProject && buildingValue && (selectedProject.requireOffice || availableOffices.length > 0) && <label><span>{t.office}<em>{selectedProject.requireOffice ? t.required : t.optional}</em></span><select value={officeId} onChange={event => { setOfficeId(event.target.value); setManualOffice(""); setLocationSelections({}); setManualLocationValues({}); }}><option value="">{t.chooseValue}</option>{availableOffices.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}{selectedProject.allowManual && <option value="__manual__">{t.manualEntry}</option>}</select>{officeId === "__manual__" && <input value={manualOffice} onChange={event => setManualOffice(event.target.value)} placeholder={t.enterManually} />}</label>}
+          {selectedProject && buildingValue && (selectedProject.locationLevels || []).filter(level => level.key !== "office").map(level => {
             const options = dynamicOptionsFor(level);
             const selected = locationSelections[level.id] || "";
-            return <label key={level.id}><span>{language === "ar" ? level.labelAr : level.labelEn || level.labelAr}<em>{level.required ? t.required : t.optional}</em></span><select value={selected} onChange={event => { setLocationSelections(current => ({ ...current, [level.id]: event.target.value })); setManualLocationValues(current => ({ ...current, [level.id]: "" })); }}><option value="">{t.chooseValue}</option>{options.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}{selectedProject.allowManual && <option value="__manual__">{t.manualEntry}</option>}</select>{selected === "__manual__" && <input value={manualLocationValues[level.id] || ""} onChange={event => setManualLocationValues(current => ({ ...current, [level.id]: event.target.value }))} placeholder={t.enterManually} />}</label>;
+            return <label key={level.id}><span>{language === "ar" ? level.labelAr : level.labelEn || level.labelAr}<em>{level.required ? t.required : t.optional}</em></span><select value={selected} onChange={event => { const descendants = selectedProject.locationLevels.filter(child => child.sortOrder > level.sortOrder).map(child => child.id); setLocationSelections(current => { const next = { ...current, [level.id]: event.target.value }; for (const id of descendants) delete next[id]; return next; }); setManualLocationValues(current => { const next = { ...current, [level.id]: "" }; for (const id of descendants) delete next[id]; return next; }); }}><option value="">{t.chooseValue}</option>{options.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}{selectedProject.allowManual && <option value="__manual__">{t.manualEntry}</option>}</select>{selected === "__manual__" && <input value={manualLocationValues[level.id] || ""} onChange={event => setManualLocationValues(current => ({ ...current, [level.id]: event.target.value }))} placeholder={t.enterManually} />}</label>;
           })}
           {locationFields.map(renderCustomField)}
         </div>}
@@ -779,6 +825,24 @@ export default function Home() {
           <section className={gps ? "capture-tool ready" : "capture-tool"}><div><span>⌖</span><p><strong>{t.gps}</strong><small>{gps ? `${gps.latitude.toFixed(7)}, ${gps.longitude.toFixed(7)} · ±${Math.round(gps.accuracy)}m` : gpsField?.required ? t.required : t.optional}</small></p></div><button disabled={gpsBusy} onClick={() => void captureGps()}>{gpsBusy ? <span className="mini-spinner" /> : gps ? `✓ ${t.gpsReady}` : t.captureGps}</button></section>
           <section className={barcode ? "capture-tool ready" : "capture-tool"}><div><span>▦</span><label><strong>{t.barcode}</strong><input className="ltr-input" value={barcode} onChange={event => setCapturedBarcode(event.target.value)} placeholder={t.barcodePlaceholder} /></label></div><button onClick={() => setScannerOpen(true)}>⌁ {t.scanBarcode}</button></section>
         </div>}
+        {selectedProject && <section className="asset-classification-card">
+          <header><div><span>01</span><h3>{language === "ar" ? "تصنيف الأصل وبيانات دورة حياته" : "Asset category and lifecycle data"}</h3></div><small>{language === "ar" ? "التصنيف إلزامي، وباقي البيانات اختيارية ويمكن تحديثها لاحقاً." : "Category is required; the remaining values are optional and can be updated later."}</small></header>
+          <div className="asset-category-picker" role="radiogroup" aria-label={language === "ar" ? "تصنيف الأصل" : "Asset category"}>{projectCategories.map(category => <button type="button" role="radio" aria-checked={categoryId === category.id} className={categoryId === category.id ? "selected" : ""} key={category.id} style={{ "--category-color": category.color } as CSSProperties} onClick={() => {
+            setCategoryId(category.id);
+            setPriceCurrency(category.currency || "AED");
+            setEstimatedPrice(category.defaultEstimatedPrice == null ? "" : String(category.defaultEstimatedPrice));
+            setUsefulLifeYears(category.defaultUsefulLifeYears == null ? "" : String(category.defaultUsefulLifeYears));
+            setError("");
+          }}><b>{category.icon || "◇"}</b><span>{language === "ar" ? category.labelAr : category.labelEn}</span></button>)}</div>
+          {projectCategories.length === 0 && <p className="context-message error">{language === "ar" ? "لا توجد تصنيفات أصول مفعلة لهذا المشروع. راجع مدير النظام." : "No asset categories are enabled for this project. Contact an administrator."}</p>}
+          <div className="asset-lifecycle-grid">
+            <label><span>{language === "ar" ? "حالة تشغيل الأصل" : "Operational status"}<em>{t.required}</em></span><select value={operationalStatus} onChange={event => setOperationalStatus(event.target.value as AssetOperationalStatus)}>{ASSET_OPERATIONAL_STATUSES.map(status => <option key={status.code} value={status.code}>{language === "ar" ? status.labelAr : status.labelEn}</option>)}</select></label>
+            <label><span>{language === "ar" ? "سعر الأصل التقريبي" : "Estimated asset price"}<em>{t.optional}</em></span><div className="money-input"><input inputMode="decimal" type="number" min="0" step="0.01" value={estimatedPrice} onChange={event => setEstimatedPrice(event.target.value)} /><input maxLength={3} value={priceCurrency} onChange={event => setPriceCurrency(event.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3))} aria-label={language === "ar" ? "العملة" : "Currency"} /></div></label>
+            <label><span>{language === "ar" ? "تكلفة الاستبدال الحالية" : "Current replacement cost"}<em>{t.optional}</em></span><input inputMode="decimal" type="number" min="0" step="0.01" value={replacementCost} onChange={event => setReplacementCost(event.target.value)} /></label>
+            <label><span>{language === "ar" ? "العمر الاستهلاكي (سنوات)" : "Useful life (years)"}<em>{t.optional}</em></span><input inputMode="numeric" type="number" min="1" max="100" value={usefulLifeYears} onChange={event => setUsefulLifeYears(event.target.value)} /></label>
+            <label><span>{language === "ar" ? "تاريخ التركيب" : "Installation date"}<em>{t.optional}</em></span><input type="date" value={installationDate} onChange={event => setInstallationDate(event.target.value)} /></label>
+          </div>
+        </section>}
         {selectedProject && <fieldset className="asset-condition-rating pre-capture-condition"><legend>{language === "ar" ? "تقييم حالة الأصل قبل التصوير" : "Asset condition before capture"}<em>{t.required}</em></legend><p>{language === "ar" ? "اختر الحالة الحالية للأصل قبل إرفاق أي صورة للتحليل." : "Choose the asset's current condition before attaching any image for analysis."}</p><div role="radiogroup" aria-label={language === "ar" ? "تقييم حالة الأصل من خمسة مستويات" : "Five-level asset condition rating"}>{ASSET_CONDITION_LEVELS.map(level => <button type="button" role="radio" aria-checked={conditionRating === level.rating} className={conditionRating === level.rating ? `selected rating-${level.rating}` : `rating-${level.rating}`} key={level.rating} onClick={() => { setConditionRating(level.rating); if (level.rating > 3) setConditionJustification(""); setError(""); }}><b>{level.rating}</b><span>{"★".repeat(level.rating)}{"☆".repeat(5 - level.rating)}</span><small>{language === "ar" ? level.labelAr : level.labelEn}</small></button>)}</div></fieldset>}
         {selectedProject && conditionRating !== null && conditionRating <= 3 && <label className="condition-justification"><span>{language === "ar" ? "سبب تقييم الحالة" : "Condition justification"}<em>{conditionRating <= 2 ? t.required : t.optional}</em></span><textarea maxLength={1000} value={conditionJustification} onChange={event => { setConditionJustification(event.target.value); setError(""); }} placeholder={language === "ar" ? "مثال: Compressor defective ويحتاج فصلاً واستبدالاً." : "Example: Compressor defective; disconnect and replace."} /><small>{language === "ar" ? (conditionRating <= 2 ? "إلزامي للحالة الحرجة أو الضعيفة، وسيظهر في التقارير." : "اختياري للحالة المتوسطة، وسيظهر في التقارير عند إدخاله.") : (conditionRating <= 2 ? "Required for Critical or Poor condition and included in reports." : "Optional for Fair condition and included in reports when provided.")}</small></label>}
         {selectedProject && <fieldset className="asset-condition-rating asset-criticality-rating"><legend>{language === "ar" ? "أهمية الأصل (Criticality)" : "Asset criticality"}<em>{t.required}</em></legend><p>{language === "ar" ? "اختر أهمية هذا الأصل حسب موقعه وتأثير تعطله؛ يُحسب الوزن تلقائياً ولا توجد خانة وزن منفصلة." : "Choose this asset's importance by location and failure impact; weight is calculated automatically."}</p><div role="radiogroup" aria-label={language === "ar" ? "أهمية الأصل من خمسة مستويات" : "Five-level asset criticality"}>{ASSET_CRITICALITY_LEVELS.map(level => <button type="button" role="radio" aria-checked={criticalityRating === level.rating} className={criticalityRating === level.rating ? `selected criticality-${level.rating}` : `criticality-${level.rating}`} key={level.rating} onClick={() => { setCriticalityRating(level.rating); setError(""); }}><b>{level.rating}</b><span>{language === "ar" ? `وزن ${level.weight}` : `Weight ${level.weight}`}</span><small>{language === "ar" ? level.labelAr : level.labelEn}</small></button>)}</div></fieldset>}
@@ -788,15 +852,6 @@ export default function Home() {
       </section>}
       {records.length > 0 && <section className="batch-bar"><div><strong>{records.length}</strong><span>{records.length === 1 ? t.batchReady : t.batchReadyMany}</span></div><button onClick={exportExcel}>{t.downloadRegister}</button></section>}
       {bulkSession && <section className="bulk-session-bar"><div><strong>{t.bulkSession}</strong><span>{bulkSessionCompleted}/{bulkSession.total} {language === "ar" ? "أصول مكتملة" : "completed assets"} · {bulkSession.context.project} / {bulkSession.context.zone || bulkSession.context.building || "—"}</span></div><button disabled={bulkSessionAssetIds.size === 0} onClick={downloadBulkSessionCsv}>{t.bulkReport}</button></section>}
-      {jobs.length > 0 && <section className="queue-section" aria-live="polite">
-        <div className="queue-heading"><div><span className="queue-pulse" /><div><h2>{t.queueTitle}</h2><p>{t.queueLead}</p></div></div><small>{t.keepOpen}</small></div>
-        <div className="queue-list">{jobs.map(job => <article className={`queue-job ${job.status}`} key={job.id}>
-          <div className="queue-number">#{String(job.order).padStart(3, "0")}</div>
-          <div className="queue-info"><strong>{job.result?.assetType || `${job.imageCount || 1} ${language === "ar" ? "صور" : "images"}`}</strong><small className="queue-location">{[job.surveyContext.project, job.surveyContext.building, job.surveyContext.floor, job.surveyContext.zone, job.surveyContext.office, ...(job.surveyContext.additionalLocations || []).map(item => item.value)].filter(Boolean).join(" • ")}</small><small title={job.fileName}>{job.fileName}</small>{job.error && <em>{job.error}</em>}</div>
-          <div className={`queue-status ${job.status}`}>{job.status === "processing" && <span className="mini-spinner" />}{job.status === "queued" ? t.queued : job.status === "processing" ? t.processing : job.status === "completed" ? t.completed : t.failedStatus}</div>
-          <div className="queue-actions">{job.status === "failed" && <button onClick={() => retryJob(job.id)}>{t.retry}</button>}{job.status !== "processing" && <button className="queue-remove" onClick={() => removeJob(job.id)} aria-label={t.cancel}>×</button>}</div>
-        </article>)}</div>
-      </section>}
       {captureStep > 1 && <section className="workspace capture-workspace">
         <div className="capture-workspace-nav"><button className="al-secondary-button" onClick={() => { setCaptureStep(1); setError(""); }}>↩ {language === "ar" ? "تعديل الموقع" : "Edit location"}</button></div>
         {captureStep === 2 && entryMode === "images" && <article className="panel upload-panel">
@@ -843,12 +898,24 @@ export default function Home() {
             {reviewCustomFields.length > 0 && <section className="asset-custom-review"><h3>{language === "ar" ? "البيانات الإضافية التي حددها الأدمن" : "Administrator-defined asset details"}</h3><div className="context-grid">{reviewCustomFields.map(renderCustomField)}</div></section>}
             {result.warnings.length > 0 && <div className="warnings"><strong>⚠ {t.warnings}</strong>{result.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</div>}
             {result.rawText && <details><summary>{t.raw}</summary><pre>{result.rawText}</pre></details>}
-            {editingRecordId && !demo && <div className="review-actions"><button className="add-record" onClick={() => void addToRegister("save")}>✓ {t.saveChanges}</button>{editingRecord?.status === "review" && <button className="approve-record" onClick={() => void addToRegister("approve")}>✓✓ {t.approveRecord}</button>}</div>}<div className="result-actions"><button className="export" onClick={exportExcel}>{t.export}</button><button className="copy" onClick={copyResult}>{copied ? t.copied : t.copyData}</button></div><button className="reset" onClick={clear}>{t.reset}</button>
+            {editingRecordId && !demo && <div className="review-actions"><button className="add-record" onClick={() => void addToRegister("save")}>✓ {t.saveChanges}</button>{editingRecord?.status === "review" && canApproveAssets && <button className="approve-record" onClick={() => void addToRegister("approve")}>✓✓ {t.approveRecord}</button>}</div>}<div className="result-actions"><button className="export" onClick={exportExcel}>{t.export}</button><button className="copy" onClick={copyResult}>{copied ? t.copied : t.copyData}</button></div><button className="reset" onClick={clear}>{t.reset}</button>
           </div>}
         </article>}
       </section>}
+      {visibleJobs.length > 0 && <section className="queue-section queue-section-at-end" aria-live="polite">
+        <div className="queue-heading"><div><span className="queue-pulse" /><div><h2>{t.queueTitle}</h2><p>{t.queueLead}</p></div></div><small>{t.keepOpen}</small></div>
+        <div className="queue-list">{visibleJobs.map(job => {
+          const reviewRecord = records.find(record => record.id === job.assetId && record.status === "review");
+          return <article className={`queue-job ${job.status}`} key={job.id}>
+            <div className="queue-number">#{String(job.order).padStart(3, "0")}</div>
+            <div className="queue-info"><strong>{job.result?.assetType || `${job.imageCount || 1} ${language === "ar" ? "صور" : "images"}`}</strong><small className="queue-location">{[job.surveyContext.project, job.surveyContext.building, job.surveyContext.floor, job.surveyContext.zone, job.surveyContext.office, ...(job.surveyContext.additionalLocations || []).map(item => item.value)].filter(Boolean).join(" • ")}</small><small title={job.fileName}>{job.fileName}</small>{job.error && <em>{job.error}</em>}</div>
+            <div className={`queue-status ${job.status}`}>{job.status === "processing" && <span className="mini-spinner" />}{job.status === "queued" ? t.queued : job.status === "processing" ? t.processing : job.status === "completed" ? (language === "ar" ? "بانتظار الاعتماد" : "Awaiting approval") : t.failedStatus}</div>
+            <div className="queue-actions">{reviewRecord && <button className="queue-review" onClick={() => openRecordForReview(reviewRecord)}>{canApproveAssets ? (language === "ar" ? "مراجعة واعتماد" : "Review & approve") : (language === "ar" ? "عرض ومراجعة" : "Open review")}</button>}{job.status === "failed" && <button onClick={() => retryJob(job.id)}>{t.retry}</button>}{job.status !== "processing" && job.status !== "completed" && <button className="queue-remove" onClick={() => removeJob(job.id)} aria-label={t.cancel}>×</button>}</div>
+          </article>;
+        })}</div>
+      </section>}
       {scannerOpen && <div className="scanner-overlay"><section role="dialog" aria-modal="true" aria-label={t.scanBarcode}><div className="scanner-head"><div><strong>{t.scanBarcode}</strong><small>{t.barcode}</small></div><button onClick={() => setScannerOpen(false)} aria-label={t.closeScanner}>×</button></div><div className="scanner-view"><video ref={scannerVideoRef} playsInline muted /><span /><p>{t.barcodePlaceholder}</p></div><button className="scanner-close" onClick={() => setScannerOpen(false)}>{t.closeScanner}</button></section></div>}
-      {scannedAsset && <div className="asset-qr-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setScannedAsset(null); }}><section role="dialog" aria-modal="true" aria-labelledby="asset-qr-title"><header><div><small>ASSET OFFLINE QR</small><h2 id="asset-qr-title">{scannedAsset.assetNo}</h2><p>البيانات مقروءة من داخل QR ولا تحتاج إنترنت.</p></div><button onClick={() => setScannedAsset(null)}>×</button></header><dl>{scannedAsset.fields.map((field, index) => <div key={`${field.label}-${index}`}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl><footer><code>{scannedAsset.assetId}</code><button onClick={() => setScannedAsset(null)}>إغلاق</button></footer></section></div>}
+      {scannedAsset && <div className="asset-qr-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setScannedAsset(null); }}><section role="dialog" aria-modal="true" aria-labelledby="asset-qr-title"><header><div><small>ASSET OFFLINE QR</small><h2 id="asset-qr-title">{scannedAsset.assetNo}</h2><p>{language === "ar" ? "البيانات الرئيسية مقروءة مباشرة دون إنترنت، وأحدث نسخة جُلبت من النظام عند توفر الاتصال." : "Core data is readable offline; the latest version is fetched from the system whenever online."}</p></div><button onClick={() => setScannedAsset(null)}>×</button></header><dl>{scannedAsset.fields.map((field, index) => <div key={`${field.label}-${index}`}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl><footer><code>{scannedAsset.assetId}</code><button onClick={() => setScannedAsset(null)}>{language === "ar" ? "إغلاق" : "Close"}</button></footer></section></div>}
       {settingsOpen && <div className="settings-overlay" onMouseDown={event => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
         <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
           <div className="settings-head"><div className="settings-icon">⚙</div><div><h2 id="settings-title">{t.settingsTitle}</h2><p>{t.settingsLead}</p></div><button onClick={() => setSettingsOpen(false)} aria-label={t.close}>×</button></div>

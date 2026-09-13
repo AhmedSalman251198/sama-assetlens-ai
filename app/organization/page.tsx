@@ -2,7 +2,10 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { useStructure } from "../lib/use-structure";
+import { languageText, useUiLanguage } from "../lib/use-ui-language";
 export default function OrganizationPage() {
+    const language = useUiLanguage();
+    const l = (ar: string, en: string) => languageText(language, ar, en);
     const { data, error } = useStructure();
     const totals = useMemo(() => ({
         projects: data?.projects.length || 0,
@@ -11,11 +14,11 @@ export default function OrganizationPage() {
         zones: data?.projects.reduce((sum, project) => sum + project.buildings.reduce((count, building) => count + building.zones.length, 0), 0) || 0,
         levels: data?.projects.reduce((sum, project) => sum + (project.locationLevels || []).length, 0) || 0,
     }), [data]);
-    return <section className="al-page organization-page">
-    <header className="al-page-head"><div><span className="al-page-kicker">Organization map</span><h2>هيكل واضح لكل مشروع وموقع</h2><p>اعرض العلاقة بين المشروع، المبنى، الطابق، الزون والمكتب في صفحة مستقلة سهلة القراءة.</p></div><div className="al-page-actions"><Link className="al-secondary-button" href="/locations">عرض المواقع</Link>{data?.currentUser.role === "admin" && <Link className="al-primary-button" href="/admin#projects">إدارة الهيكل</Link>}</div></header>
+    return <section className="al-page organization-page" dir={language === "ar" ? "rtl" : "ltr"}>
+    <header className="al-page-head"><div><span className="al-page-kicker">Organization map</span><h2>{l("هيكل واضح لكل مشروع وموقع", "A clear structure for every project and location")}</h2><p>{l("اعرض العلاقة بين المشروع، المبنى، الطابق، الزون والمكتب في صفحة مستقلة سهلة القراءة.", "View the relationship between project, building, floor, zone and room in one clear page.")}</p></div><div className="al-page-actions"><Link className="al-secondary-button" href="/locations">{l("إدارة الأصول", "Manage assets")}</Link>{data?.currentUser.role === "admin" && <Link className="al-primary-button" href="/admin#projects">{l("إدارة الهيكل", "Manage structure")}</Link>}</div></header>
     {error && <div className="al-alert" role="alert">{error}</div>}
     {!data && !error ? <div className="al-loading-grid"><div className="al-skeleton"/><div className="al-skeleton"/><div className="al-skeleton"/><div className="al-skeleton"/></div> : data && <>
-      <div className="organization-summary">{[[totals.projects, "المشاريع", "01"], [totals.buildings, "المباني والمواقع", "02"], [totals.floors, "الطوابق", "03"], [totals.zones, "الزونات", "04"], [totals.levels, "المستويات الإضافية", "05"]].map(([value, label, index]) => <article className="al-card" key={String(label)}><span>{index}</span><div><strong>{value}</strong><small>{label}</small></div></article>)}</div>
+      <div className="organization-summary">{[[totals.projects, l("المشاريع", "Projects"), "01"], [totals.buildings, l("المباني والمواقع", "Buildings & sites"), "02"], [totals.floors, l("الطوابق", "Floors"), "03"], [totals.zones, l("الزونات", "Zones"), "04"], [totals.levels, l("المستويات الإضافية", "Custom levels"), "05"]].map(([value, label, index]) => <article className="al-card" key={String(label)}><span>{index}</span><div><strong>{value}</strong><small>{label}</small></div></article>)}</div>
       {data.projects.length ? <div className="organization-projects">{data.projects.map((project, index) => {
                     const floorCount = project.buildings.reduce((sum, building) => sum + building.floors.length, 0);
                     const zoneCount = project.buildings.reduce((sum, building) => sum + building.zones.length, 0);

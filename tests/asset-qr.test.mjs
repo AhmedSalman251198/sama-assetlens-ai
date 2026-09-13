@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildAssetQrPayload, createAssetQrText, createAssetQrValue, parseAssetQrValue } from "../app/lib/asset-qr.ts";
 
-test("offline QR roundtrip keeps only the core asset snapshot and selected custom fields", async () => {
+test("offline QR embeds the optimized core snapshot and keeps the immutable ID", async () => {
   const payload = buildAssetQrPayload({
     id: "2a50d147-d12c-4d58-819f-c26620578d89",
     assetNo: "AST-00042",
@@ -32,20 +32,21 @@ test("offline QR roundtrip keeps only the core asset snapshot and selected custo
   });
 
   const encoded = await createAssetQrValue("https://assetlens.example", payload);
-  assert.match(encoded, /^https:\/\/assetlens\.example\/scan#alqr2\.[gj]\./);
+  assert.match(encoded, /^ASSETLENS ASSET V2\n/);
+  assert.doesNotMatch(encoded, /https?:\/\//);
   const decoded = await parseAssetQrValue(encoded);
 
   assert.equal(decoded?.assetId, payload.assetId);
-  assert.equal(decoded?.assetNo, payload.assetNo);
-  assert.deepEqual(decoded?.fields, payload.fields);
-  assert.ok(decoded?.fields.some(field => field.label === "Manufacturer" && field.value === "Carrier"));
-  assert.ok(decoded?.fields.some(field => field.label === "Asset Condition Rating" && field.value === "4/5"));
-  assert.ok(decoded?.fields.some(field => field.label === "Asset Criticality" && field.value === "Critical (Weight 5)"));
-  assert.ok(decoded?.fields.some(field => field.label === "Condition" && field.value === "Good"));
-  assert.ok(decoded?.fields.some(field => field.label === "Department" && field.value === "Facilities"));
-  assert.ok(!decoded?.fields.some(field => field.label === "AI Confidence"));
-  assert.ok(!decoded?.fields.some(field => field.label === "Latitude"));
-  assert.ok(!decoded?.fields.some(field => field.label === "Rated Power"));
+  assert.equal(decoded?.version, 2);
+  assert.ok(decoded?.fields.some(field => field.label === "ID" && field.value === payload.assetId));
+  assert.ok(payload.fields.some(field => field.label === "Make" && field.value === "Carrier"));
+  assert.ok(payload.fields.some(field => field.label === "Condition" && field.value === "4/5"));
+  assert.ok(payload.fields.some(field => field.label === "Criticality" && field.value === "Critical (W5)"));
+  assert.ok(!payload.fields.some(field => field.label === "Surveyor"));
+  assert.ok(!payload.fields.some(field => field.label === "Created At"));
+  assert.ok(!payload.fields.some(field => field.label === "AI Confidence"));
+  assert.ok(!payload.fields.some(field => field.label === "Latitude"));
+  assert.ok(!payload.fields.some(field => field.label === "Rated Power"));
 });
 
 test("offline QR refuses an empty database snapshot", () => {
@@ -61,9 +62,9 @@ test("direct offline QR is readable text and needs no URL or deployment", async 
     fields: [{ key: "serial", label: "Serial Number", value: "56P01085" }],
   });
   const direct = createAssetQrText(payload);
-  assert.match(direct, /^ASSETLENS-OFFLINE-V2\n/);
-  assert.match(direct, /Asset Number: AST-DIRECT-01/);
-  assert.match(direct, /Serial Number: 56P01085/);
+  assert.match(direct, /^ASSETLENS ASSET V2\n/);
+  assert.match(direct, /No: AST-DIRECT-01/);
+  assert.match(direct, /Serial: 56P01085/);
   assert.doesNotMatch(direct, /https?:\/\//);
   const decoded = await parseAssetQrValue(direct);
   assert.equal(decoded?.assetId, payload.assetId);

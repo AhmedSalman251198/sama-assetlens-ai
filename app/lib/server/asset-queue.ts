@@ -111,9 +111,6 @@ export async function processNextAnalysisJob(token: string, sessionGeminiKey = "
     const duplicate = await findDuplicateWarning(token, job.asset_id, result.fields);
     const warnings = Array.from(new Set([...result.warnings, ...(duplicate ? [duplicate] : [])]));
 
-    // Determine if it needs review based on confidence or specific warnings
-    const needsReview = warnings.length > 0 || result.overallConfidence < 0.75;
-
     await patchAsset(token, job.asset_id, {
       asset_type: result.assetType,
       summary: result.summary,
@@ -121,7 +118,9 @@ export async function processNextAnalysisJob(token: string, sessionGeminiKey = "
       warnings,
       raw_text: result.rawText,
       overall_confidence: result.overallConfidence,
-      status: needsReview ? "review" : "completed",
+      // AI extraction never auto-approves an asset. A human must confirm the
+      // result; only then does it leave the capture queue.
+      status: "review",
       error: null,
       completed_at: completedAt,
     });

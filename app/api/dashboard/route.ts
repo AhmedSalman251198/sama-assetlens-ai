@@ -1,4 +1,4 @@
-import { requestToken, supabaseRest, supabaseRestWithCount, verifyAuthUser } from "../../lib/server/supabase";
+import { requestToken, supabaseRest, supabaseRestAll, supabaseRestWithCount, verifyAuthUser } from "../../lib/server/supabase";
 import { hasModuleAccess } from "../../lib/server/module-access";
 
 export const runtime = "nodejs";
@@ -124,8 +124,8 @@ export async function GET(request: Request) {
       countRows("buildings?select=id&active=eq.true", token),
       countRows("floors?select=id", token),
       countRows("zones?select=id", token),
-      supabaseRest<ActivityRow[]>(`assets?select=created_at&created_at=gte.${encodeURIComponent(activityStart.toISOString())}&order=created_at.asc&limit=5000`, token),
-      supabaseRest<ProjectAssetRow[]>("assets?select=project_id&limit=10000", token),
+      supabaseRestAll<ActivityRow>(`assets?select=created_at&created_at=gte.${encodeURIComponent(activityStart.toISOString())}&order=created_at.asc`, token),
+      supabaseRestAll<ProjectAssetRow>("assets?select=project_id", token),
     ]);
 
     const countsByProject = new Map<string, number>();

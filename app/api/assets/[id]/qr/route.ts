@@ -26,6 +26,14 @@ type AssetRow = {
   overall_confidence: number;
   condition_rating: number | null;
   criticality_rating: number | null;
+  operational_status: string;
+  estimated_price: number | null;
+  replacement_cost: number | null;
+  price_currency: string;
+  useful_life_years: number | null;
+  remaining_life_years: number | null;
+  enrichment_data: Record<string, unknown>;
+  asset_categories: { label_ar: string; label_en: string } | null;
   status: string;
   error: string | null;
   created_at: string;
@@ -38,15 +46,12 @@ type AssetRow = {
   captured_offline?: boolean;
   device_captured_at?: string | null;
 };
-type CustomValueRow = { custom_field_id: string; value_text: string };
-type CustomFieldRow = { id: string; field_key: string; label_ar: string; label_en: string; unit?: string; show_in_qr?: boolean };
-
 function safeId(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) ? value : "";
 }
 
 async function fetchAsset(token: string, id: string) {
-  const core = "id,asset_no,project_id,project_name,building_name,floor_name,zone_name,office_name,additional_locations,surveyor_email,source_file_names,asset_type,summary,fields,warnings,overall_confidence,condition_rating,criticality_rating,status,error,created_at,updated_at,completed_at";
+  const core = "id,asset_no,project_id,project_name,building_name,floor_name,zone_name,office_name,additional_locations,surveyor_email,source_file_names,asset_type,summary,fields,warnings,overall_confidence,condition_rating,criticality_rating,operational_status,estimated_price,replacement_cost,price_currency,useful_life_years,remaining_life_years,enrichment_data,status,error,created_at,updated_at,completed_at,asset_categories(label_ar,label_en)";
   try {
     const rows = await supabaseRest<AssetRow[]>(`assets?select=${core},latitude,longitude,gps_accuracy_m,barcode,captured_offline,device_captured_at&id=eq.${encodeURIComponent(id)}&limit=1`, token);
     return rows[0] || null;
@@ -73,20 +78,6 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const asset = await fetchAsset(token, id);
     if (!asset) return Response.json({ error: "Asset not found or access is not allowed." }, { status: 404 });
 
-    const customValues = await supabaseRest<CustomValueRow[]>(`asset_custom_values?select=custom_field_id,value_text&asset_id=eq.${encodeURIComponent(id)}&limit=1000`, token);
-    const fieldIds = Array.from(new Set(customValues.map(value => value.custom_field_id).filter(Boolean)));
-    let customFields: CustomFieldRow[] = [];
-    if (fieldIds.length) {
-      const filter = `id=in.(${fieldIds.map(encodeURIComponent).join(",")})&limit=1000`;
-      try { customFields = await supabaseRest<CustomFieldRow[]>(`custom_fields?select=id,field_key,label_ar,label_en,unit,show_in_qr&${filter}`, token); }
-      catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        if (!/schema cache|column.*(unit|show_in_qr)/i.test(message)) throw error;
-        customFields = await supabaseRest<CustomFieldRow[]>(`custom_fields?select=id,field_key,label_ar,label_en&${filter}`, token);
-      }
-    }
-    const fieldById = new Map(customFields.map(field => [field.id, field]));
-
     const source: AssetQrSource = {
       id: asset.id,
       assetNo: asset.asset_no,
@@ -101,13 +92,15 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       barcode: asset.barcode || "",
       conditionRating: asset.condition_rating,
       criticalityRating: asset.criticality_rating,
+      operationalStatus: asset.operational_status,
+      category: asset.asset_categories?.label_ar || asset.asset_categories?.label_en || "",
+      estimatedPrice: asset.estimated_price,
+      replacementCost: asset.replacement_cost,
+      priceCurrency: asset.price_currency,
+      usefulLifeYears: asset.useful_life_years,
+      remainingLifeYears: asset.remaining_life_years,
+      enrichmentData: asset.enrichment_data || {},
       fields: Array.isArray(asset.fields) ? asset.fields : [],
-      customValues: customValues.flatMap(value => {
-        const field = fieldById.get(value.custom_field_id);
-        if (field?.show_in_qr === false) return [];
-        const unit = field?.unit ? ` (${field.unit})` : "";
-        return [{ key: field?.field_key || value.custom_field_id, labelAr: `${field?.label_ar || ""}${unit}`, labelEn: `${field?.label_en || ""}${unit}`, value: value.value_text }];
-      }),
     };
 
     return Response.json({ source }, { headers: { "Cache-Control": "private, no-store" } });

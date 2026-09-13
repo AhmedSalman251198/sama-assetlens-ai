@@ -1,4 +1,4 @@
-import { createSupabasePasswordUser, requestToken, supabaseRest, updateSupabaseUserPassword, verifyAuthUser } from "../../lib/server/supabase";
+import { assertSupabaseAdminConfigured, createSupabasePasswordUser, requestToken, supabaseRest, supabaseRestAll, updateSupabaseUserIdentity, updateSupabaseUserPassword, verifyAuthUser } from "../../lib/server/supabase";
 import { isSuperAdminEmail } from "../../lib/server/super-admin";
 import { canUseModule, ModuleAction, ModuleKey, ModulePermission, normalizeModulePermissions } from "../../lib/module-permissions";
 import { hasModuleAccess, mapPermissionRows } from "../../lib/server/module-access";
@@ -12,14 +12,16 @@ type BuildingRow = { id: string; project_id: string; name: string };
 type FloorRow = { id: string; building_id: string; name: string; sort_order: number };
 type ZoneRow = { id: string; building_id: string; floor_id: string | null; name: string };
 type OfficeRow = { id: string; building_id: string; floor_id: string | null; zone_id: string | null; name: string };
-type LocationLevelRow = { id: string; project_id: string; level_key: string; label_ar: string; label_en: string; required: boolean; sort_order: number };
-type LocationOptionRow = { id: string; level_id: string; building_id: string | null; floor_id: string | null; zone_id: string | null; name: string };
+type LocationLevelRow = { id: string; project_id: string; parent_level_id: string | null; level_key: string; label_ar: string; label_en: string; required: boolean; sort_order: number };
+type LocationOptionRow = { id: string; level_id: string; building_id: string | null; floor_id: string | null; zone_id: string | null; office_id: string | null; parent_option_id: string | null; name: string };
 type AssignmentRow = { app_user_id: string; project_id: string };
 type ModulePermissionRow = { app_user_id: string; module_key: ModuleKey; can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean; can_approve: boolean; can_export: boolean };
 type ConfigRow = { id: string; project_id: string; version: number; status: "draft" | "published" | "archived"; created_at: string; published_at: string | null };
 type FieldType = "text" | "textarea" | "number" | "date" | "select" | "boolean";
 type FieldRow = { id: string; config_id: string; field_key: string; label_ar: string; label_en: string; section: string; field_type: FieldType; enabled: boolean; required: boolean; option_values: unknown; sort_order: number; help_text_ar: string; help_text_en: string; asset_types?: string[]; unit?: string; ai_extract?: boolean; show_in_reports?: boolean; show_in_qr?: boolean };
 type AuditRow = { id: number; actor_email: string; action: string; entity_type: string; entity_id: string | null; project_id: string | null; details: Record<string, unknown>; created_at: string };
+type AssetCategoryRow = { id: string; code: string; label_ar: string; label_en: string; color: string; icon: string; default_useful_life_years: number | null; default_estimated_price: number | null; currency: string; default_criticality_rating: number | null; technical_fields: unknown; active: boolean; sort_order: number };
+type ProjectCategoryRow = { project_id: string; category_id: string; asset_type_required: boolean; active: boolean };
 type ConfigScope = "structure" | "capture" | "admin";
 type ConfigSnapshot = {
   actor: Actor | null;
@@ -98,8 +100,8 @@ function assembleConfig(snapshot: ConfigSnapshot) {
       customFields: published ? (fieldsByConfig.get(published.id) || []).filter(field => field.enabled).map(mapField) : [],
       locationLevels: (levelsByProject.get(project.id) || []).sort((left, right) => left.sort_order - right.sort_order).map(level => ({
         id: level.id, key: level.level_key, labelAr: level.label_ar, labelEn: level.label_en,
-        required: level.required, sortOrder: level.sort_order,
-        options: (optionsByLevel.get(level.id) || []).map(option => ({ id: option.id, buildingId: option.building_id, floorId: option.floor_id, zoneId: option.zone_id, name: option.name })),
+        required: level.required, sortOrder: level.sort_order, parentLevelId: level.parent_level_id || "",
+        options: (optionsByLevel.get(level.id) || []).map(option => ({ id: option.id, buildingId: option.building_id, floorId: option.floor_id, zoneId: option.zone_id, officeId: option.office_id, parentOptionId: option.parent_option_id, name: option.name })),
       })),
       draftConfig: draft ? { id: draft.id, version: draft.version, fields: (fieldsByConfig.get(draft.id) || []).map(mapField) } : null,
       buildings: (buildingsByProject.get(project.id) || []).map(building => ({
@@ -121,6 +123,33 @@ function assembleConfig(snapshot: ConfigSnapshot) {
   };
 }
 
+function mappedCategory(row: AssetCategoryRow) {
+  return {
+    id: row.id, code: row.code, labelAr: row.label_ar, labelEn: row.label_en,
+    color: row.color, icon: row.icon, defaultUsefulLifeYears: row.default_useful_life_years === null ? null : Number(row.default_useful_life_years),
+    defaultEstimatedPrice: row.default_estimated_price === null ? null : Number(row.default_estimated_price),
+    currency: row.currency || "AED", defaultCriticalityRating: row.default_criticality_rating === null ? null : Number(row.default_criticality_rating),
+    technicalFields: Array.isArray(row.technical_fields) ? row.technical_fields.filter((item): item is string => typeof item === "string") : [], active: row.active, sortOrder: row.sort_order,
+  };
+}
+
+async function attachAssetCategories<T extends { projects: Array<{ id: string }> }>(config: T, token: string) {
+  const [categoryRows, assignmentRows] = await Promise.all([
+    supabaseRest<AssetCategoryRow[]>("asset_categories?select=id,code,label_ar,label_en,color,icon,default_useful_life_years,default_estimated_price,currency,default_criticality_rating,technical_fields,active,sort_order&order=sort_order,label_en", token).catch(() => []),
+    supabaseRest<ProjectCategoryRow[]>("project_asset_categories?select=project_id,category_id,asset_type_required,active", token).catch(() => []),
+  ]);
+  const enabledByProject = grouped(assignmentRows.filter(item => item.active), item => item.project_id);
+  return {
+    ...config,
+    categories: categoryRows.map(mappedCategory),
+    projects: config.projects.map(project => ({
+      ...project,
+      categoryIds: (enabledByProject.get(project.id) || []).map(item => item.category_id),
+      categorySettings: (enabledByProject.get(project.id) || []).map(item => ({ categoryId: item.category_id, assetTypeRequired: item.asset_type_required })),
+    })),
+  };
+}
+
 async function configFor(actor: Actor, token: string, scope: ConfigScope = "admin") {
   const [projectRows, buildings, floors, zones, offices, locationLevels, locationOptions] = await Promise.all([
     supabaseRest<ProjectRow[]>("projects?select=id,name,require_building,require_floor,require_zone,require_office,allow_manual&active=eq.true&order=name", token),
@@ -128,8 +157,8 @@ async function configFor(actor: Actor, token: string, scope: ConfigScope = "admi
     supabaseRest<FloorRow[]>("floors?select=id,building_id,name,sort_order&order=sort_order,name", token),
     supabaseRest<ZoneRow[]>("zones?select=id,building_id,floor_id,name&order=name", token),
     supabaseRest<OfficeRow[]>("offices?select=id,building_id,floor_id,zone_id,name&active=eq.true&order=name", token),
-    supabaseRest<LocationLevelRow[]>("location_levels?select=id,project_id,level_key,label_ar,label_en,required,sort_order&active=eq.true&order=sort_order,label_ar", token),
-    supabaseRest<LocationOptionRow[]>("location_options?select=id,level_id,building_id,floor_id,zone_id,name&active=eq.true&order=name", token),
+    supabaseRestAll<LocationLevelRow>("location_levels?select=id,project_id,parent_level_id,level_key,label_ar,label_en,required,sort_order&active=eq.true&order=sort_order,label_ar", token),
+    supabaseRestAll<LocationOptionRow>("location_options?select=id,level_id,building_id,floor_id,zone_id,office_id,parent_option_id,name&active=eq.true&order=name", token),
   ]);
   const [configs, fields] = scope === "structure" ? [[], []] as [ConfigRow[], FieldRow[]] : await Promise.all([
     supabaseRest<ConfigRow[]>("survey_config_versions?select=id,project_id,version,status,created_at,published_at&order=version.desc", token),
@@ -150,6 +179,15 @@ async function optimizedConfig(token: string, scope: ConfigScope) {
     headers: { Prefer: "return=representation" },
     body: JSON.stringify({ include_forms: scope !== "structure", include_admin: scope === "admin" }),
   }).catch(() => null);
+  // The existing SQL snapshot predates parent/office links. Hydrate these
+  // tables directly until a revised snapshot is deployed, so capture and
+  // transfers never receive a stale or incomplete dynamic hierarchy.
+  if (snapshot) {
+    [snapshot.locationLevels, snapshot.locationOptions] = await Promise.all([
+      supabaseRestAll<LocationLevelRow>("location_levels?select=id,project_id,parent_level_id,level_key,label_ar,label_en,required,sort_order&active=eq.true&order=sort_order,label_ar", token),
+      supabaseRestAll<LocationOptionRow>("location_options?select=id,level_id,building_id,floor_id,zone_id,office_id,parent_option_id,name&active=eq.true&order=name", token),
+    ]);
+  }
   if (snapshot && scope !== "structure") snapshot.fields = await customFieldsFor(token).catch(() => snapshot.fields);
   if (snapshot?.actor) snapshot.modulePermissions = await supabaseRest<ModulePermissionRow[]>(`user_module_permissions?select=app_user_id,module_key,can_view,can_create,can_edit,can_delete,can_approve,can_export${snapshot.actor.role === "admin" && scope === "admin" ? "" : `&app_user_id=eq.${encodeURIComponent(snapshot.actor.id)}`}`, token).catch(() => []);
   return snapshot;
@@ -160,8 +198,8 @@ function boolean(body: Record<string, unknown>, key: string, fallback = false) {
 function validPassword(password: string) { return password.length >= 10 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9]/.test(password); }
 const FIELD_TYPES = new Set<FieldType>(["text", "textarea", "number", "date", "select", "boolean"]);
 const ACTOR_ROLES = new Set<ActorRole>(["admin", "project_manager", "reviewer", "surveyor", "viewer"]);
-const ADMIN_CREATE_ACTIONS = new Set(["createProject", "addBuilding", "addFloor", "addZone", "addOffice", "addLocationLevel", "addLocationOption", "createUser", "createConfigDraft", "addSuggestedFields"]);
-const ADMIN_DELETE_ACTIONS = new Set(["archiveProject", "archiveBuilding", "deleteFloor", "deleteZone", "deleteOffice", "deleteLocationLevel", "deleteLocationOption"]);
+const ADMIN_CREATE_ACTIONS = new Set(["createProject", "addBuilding", "addFloor", "addZone", "addOffice", "addLocationLevel", "addLocationOption", "createUser", "createConfigDraft", "addSuggestedFields", "saveAssetCategory"]);
+const ADMIN_DELETE_ACTIONS = new Set(["archiveProject", "archiveBuilding", "deleteFloor", "deleteZone", "deleteOffice", "deleteLocationLevel", "deleteLocationOption", "setAssetCategoryActive", "deleteAssetCategory"]);
 const ADMIN_APPROVE_ACTIONS = new Set(["publishConfig"]);
 function permissionForAdminAction(action: string): ModuleAction {
   if (ADMIN_CREATE_ACTIONS.has(action)) return "create";
@@ -173,7 +211,6 @@ const SUGGESTED_FIELDS = [
   { field_key: "room", label_ar: "الغرفة", label_en: "Room", field_type: "text", required: false, option_values: [], sort_order: 10 },
   { field_key: "section", label_ar: "القسم / المنطقة", label_en: "Section", field_type: "text", required: false, option_values: [], sort_order: 20 },
   { field_key: "asset_condition", label_ar: "حالة الأصل الفنية", label_en: "Asset Condition", field_type: "select", required: false, option_values: [{ code: "excellent", labelAr: "ممتازة", labelEn: "Excellent" }, { code: "good", labelAr: "جيدة", labelEn: "Good" }, { code: "fair", labelAr: "متوسطة", labelEn: "Fair" }, { code: "poor", labelAr: "ضعيفة", labelEn: "Poor" }, { code: "damaged", labelAr: "تالفة", labelEn: "Damaged" }], sort_order: 30 },
-  { field_key: "asset_status", label_ar: "حالة تشغيل الأصل", label_en: "Asset Status", field_type: "select", required: false, option_values: [{ code: "active", labelAr: "يعمل", labelEn: "Active" }, { code: "inactive", labelAr: "متوقف", labelEn: "Inactive" }, { code: "maintenance", labelAr: "تحت الصيانة", labelEn: "Under Maintenance" }, { code: "disposed", labelAr: "مستبعد", labelEn: "Disposed" }], sort_order: 40 },
   { field_key: "department", label_ar: "الإدارة / القسم", label_en: "Department", field_type: "text", required: false, option_values: [], sort_order: 50 },
   { field_key: "gps_location", label_ar: "الموقع الجغرافي GPS", label_en: "GPS Location", field_type: "text", required: false, option_values: [], sort_order: 60 },
   { field_key: "barcode", label_ar: "رمز الأصل QR / Barcode", label_en: "Asset QR / Barcode", field_type: "text", required: false, option_values: [], sort_order: 70 },
@@ -199,7 +236,14 @@ export async function GET(request: Request) {
     const snapshot = await optimizedConfig(token, scope);
     if (snapshot) {
       if (!snapshot.actor?.active) return Response.json({ error: "Sign in with an authorized AssetLens AI account." }, { status: 401 });
-      const config = assembleConfig(snapshot);
+      // The older compact SQL snapshot deliberately pre-dates the parent
+      // columns. Hydrate these two lightweight lists so all pages receive the
+      // same live, nested hierarchy after migration 016.
+      [snapshot.locationLevels, snapshot.locationOptions] = await Promise.all([
+        supabaseRestAll<LocationLevelRow>("location_levels?select=id,project_id,parent_level_id,level_key,label_ar,label_en,required,sort_order&active=eq.true&order=sort_order,label_ar", token),
+        supabaseRestAll<LocationOptionRow>("location_options?select=id,level_id,building_id,floor_id,zone_id,office_id,parent_option_id,name&active=eq.true&order=name", token),
+      ]);
+      const config = await attachAssetCategories(assembleConfig(snapshot), token);
       const permissions = config.currentUser.modulePermissions;
       const allowed = scope === "admin"
         ? canUseModule(permissions, "administration")
@@ -211,7 +255,7 @@ export async function GET(request: Request) {
     }
     const auth = await actorFor(request);
     if (!auth) return Response.json({ error: "Sign in with an authorized AssetLens AI account." }, { status: 401 });
-    const config = await configFor(auth.actor, auth.token, scope);
+    const config = await attachAssetCategories(await configFor(auth.actor, auth.token, scope), auth.token);
     const permissions = config.currentUser.modulePermissions;
     const allowed = scope === "admin"
       ? canUseModule(permissions, "administration")
@@ -234,12 +278,18 @@ export async function POST(request: Request) {
     if (!auth.actor.user_id || !await hasModuleAccess(auth.token, auth.actor.user_id, "administration", requiredPermission)) return Response.json({ error: `Administration ${requiredPermission} permission is required.` }, { status: 403 });
     const accountActions = new Set(["createUser", "upsertUser", "setUserActive", "resetUserPassword"]);
     if (accountActions.has(action) && !isSuperAdminEmail(auth.actor.email)) return Response.json({ error: "Only the AssetLens super administrator can create or manage user accounts." }, { status: 403 });
+    if (action === "deleteAssetCategory" && !isSuperAdminEmail(auth.actor.email)) return Response.json({ error: "Only the AssetLens super administrator can permanently delete asset categories." }, { status: 403 });
     if (action === "createProject") {
       const name = value(body, "name"); if (!name) return Response.json({ error: "Project name is required." }, { status: 400 });
       const existing = await supabaseRest<Array<{ id: string }>>(`projects?select=id&name=eq.${encodeURIComponent(name)}&limit=1`, auth.token);
       if (!existing.length) {
         const created = await supabaseRest<Array<{ id: string }>>("projects", auth.token, { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ name, require_building: boolean(body, "requireBuilding", true), require_floor: boolean(body, "requireFloor", true), require_zone: boolean(body, "requireZone"), require_office: boolean(body, "requireOffice"), allow_manual: boolean(body, "allowManual", true) }) });
-        if (created[0]?.id) await supabaseRest("survey_config_versions", auth.token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ project_id: created[0].id, version: 1, status: "published", published_at: new Date().toISOString() }) });
+        if (created[0]?.id) {
+          await supabaseRest("survey_config_versions", auth.token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ project_id: created[0].id, version: 1, status: "published", published_at: new Date().toISOString() }) });
+          const requestedCategoryIds = Array.isArray(body.categoryIds) ? body.categoryIds.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
+          const categoryIds = requestedCategoryIds.length ? requestedCategoryIds : (await supabaseRest<Array<{ id: string }>>("asset_categories?select=id&active=eq.true&order=sort_order", auth.token).catch(() => [])).map(item => item.id);
+          if (categoryIds.length) await supabaseRest("project_asset_categories", auth.token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(categoryIds.map(categoryId => ({ project_id: created[0].id, category_id: categoryId, active: true }))) });
+        }
       }
     } else if (action === "updateProject") {
       const projectId = value(body, "projectId"); const name = value(body, "name"); if (!projectId || !name) return Response.json({ error: "Project and name are required." }, { status: 400 });
@@ -247,6 +297,28 @@ export async function POST(request: Request) {
     } else if (action === "archiveProject") {
       const projectId = value(body, "projectId"); if (!projectId) return Response.json({ error: "Project is required." }, { status: 400 });
       await supabaseRest(`projects?id=eq.${encodeURIComponent(projectId)}`, auth.token, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ active: false }) });
+    } else if (action === "setProjectCategories") {
+      const projectId = value(body, "projectId");
+      const categoryIds = Array.isArray(body.categoryIds) ? Array.from(new Set(body.categoryIds.filter((item): item is string => typeof item === "string" && item.length > 0))) : [];
+      if (!projectId || !categoryIds.length) return Response.json({ error: "Choose a project and at least one asset category." }, { status: 400 });
+      await supabaseRest(`project_asset_categories?project_id=eq.${encodeURIComponent(projectId)}`, auth.token, { method: "DELETE", headers: { Prefer: "return=minimal" } });
+      await supabaseRest("project_asset_categories", auth.token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(categoryIds.map(categoryId => ({ project_id: projectId, category_id: categoryId, active: true }))) });
+    } else if (action === "saveAssetCategory") {
+      const id = value(body, "id"); const labelAr = value(body, "labelAr"); const labelEn = value(body, "labelEn");
+      const rawCode = value(body, "code", 64).toLowerCase(); const code = rawCode.replace(/[^a-z0-9_]/g, "_").replace(/^_+|_+$/g, "");
+      const color = value(body, "color", 7).toUpperCase(); const life = Number(body.defaultUsefulLifeYears); const price = Number(body.defaultEstimatedPrice);
+      if (!labelAr || !labelEn || !/^[a-z][a-z0-9_]{1,63}$/.test(code) || !/^#[0-9A-F]{6}$/.test(color)) return Response.json({ error: "Category names, valid code and color are required." }, { status: 400 });
+      const technicalFields = Array.isArray(body.technicalFields) ? Array.from(new Set(body.technicalFields.map(item => typeof item === "string" ? item.trim().slice(0, 80) : "").filter(Boolean))).slice(0, 40) : [];
+      const payload = { code, label_ar: labelAr, label_en: labelEn, color, icon: "", default_useful_life_years: Number.isFinite(life) && life > 0 ? life : null, default_estimated_price: Number.isFinite(price) && price >= 0 ? price : null, currency: value(body, "currency", 3).toUpperCase() || "AED", default_criticality_rating: null, technical_fields: technicalFields, active: true, sort_order: Math.max(0, Math.min(9999, Number(body.sortOrder) || 0)), updated_at: new Date().toISOString() };
+      await supabaseRest(id ? `asset_categories?id=eq.${encodeURIComponent(id)}` : "asset_categories", auth.token, { method: id ? "PATCH" : "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(payload) });
+    } else if (action === "setAssetCategoryActive") {
+      const id = value(body, "id"); if (!id) return Response.json({ error: "Asset category is required." }, { status: 400 });
+      await supabaseRest(`asset_categories?id=eq.${encodeURIComponent(id)}`, auth.token, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ active: boolean(body, "active"), updated_at: new Date().toISOString() }) });
+    } else if (action === "deleteAssetCategory") {
+      const id = value(body, "id"); if (!id) return Response.json({ error: "Asset category is required." }, { status: 400 });
+      const linkedAssets = await supabaseRest<Array<{ id: string }>>(`assets?select=id&category_id=eq.${encodeURIComponent(id)}&limit=1`, auth.token);
+      if (linkedAssets.length) return Response.json({ error: "This category is already used by assets. Disable it instead to preserve history." }, { status: 409 });
+      await supabaseRest(`asset_categories?id=eq.${encodeURIComponent(id)}`, auth.token, { method: "DELETE", headers: { Prefer: "return=minimal" } });
     } else if (action === "addBuilding" || action === "addFloor" || action === "addZone" || action === "addOffice") {
       const name = value(body, "name"); const buildingId = value(body, "buildingId"); const projectId = value(body, "projectId"); if (!name || (action === "addBuilding" ? !projectId : !buildingId)) return Response.json({ error: "Parent location and name are required." }, { status: 400 });
       const table = action === "addBuilding" ? "buildings" : action === "addFloor" ? "floors" : action === "addZone" ? "zones" : "offices";
@@ -271,7 +343,15 @@ export async function POST(request: Request) {
       const rawKey = value(body, "key", 64).toLowerCase();
       const levelKey = rawKey.replace(/[^a-z0-9_]/g, "_").replace(/^_+|_+$/g, "");
       if (!labelAr || (action === "addLocationLevel" && (!projectId || !/^[a-z][a-z0-9_]{1,63}$/.test(levelKey))) || (action === "updateLocationLevel" && !id)) return Response.json({ error: "Project, Arabic label and a valid English key are required." }, { status: 400 });
-      const payload = { label_ar: labelAr, label_en: labelEn, required: boolean(body, "required"), sort_order: Math.max(0, Math.min(9999, Number(body.sortOrder) || 10)), ...(action === "addLocationLevel" ? { project_id: projectId, level_key: levelKey, active: true } : {}) };
+      const parentLevelId = value(body, "parentLevelId", 80);
+      let sortOrder = Math.max(0, Math.min(9999, Number(body.sortOrder) || 10));
+      if (parentLevelId) {
+        const parentRows = await supabaseRest<Array<{ project_id: string; sort_order: number }>>(`location_levels?select=project_id,sort_order&id=eq.${encodeURIComponent(parentLevelId)}&limit=1`, auth.token);
+        const effectiveProjectId = action === "addLocationLevel" ? projectId : (await supabaseRest<Array<{ project_id: string }>>(`location_levels?select=project_id&id=eq.${encodeURIComponent(id)}&limit=1`, auth.token))[0]?.project_id;
+        if (!parentRows[0] || parentRows[0].project_id !== effectiveProjectId) return Response.json({ error: "The preceding level must belong to the same project." }, { status: 400 });
+        sortOrder = Math.max(sortOrder, parentRows[0].sort_order + 10);
+      }
+      const payload = { label_ar: labelAr, label_en: labelEn, required: boolean(body, "required"), sort_order: sortOrder, ...(action === "addLocationLevel" ? { project_id: projectId, level_key: levelKey, parent_level_id: parentLevelId || null, active: true } : {}) };
       await supabaseRest(action === "addLocationLevel" ? "location_levels" : `location_levels?id=eq.${encodeURIComponent(id)}`, auth.token, { method: action === "addLocationLevel" ? "POST" : "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(payload) });
     } else if (action === "deleteLocationLevel") {
       const id = value(body, "id"); if (!id) return Response.json({ error: "Location level is required." }, { status: 400 });
@@ -279,7 +359,12 @@ export async function POST(request: Request) {
     } else if (action === "addLocationOption") {
       const levelId = value(body, "levelId"); const name = value(body, "name");
       if (!levelId || !name) return Response.json({ error: "Location level and option name are required." }, { status: 400 });
-      await supabaseRest("location_options", auth.token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ level_id: levelId, building_id: value(body, "buildingId") || null, floor_id: value(body, "floorId") || null, zone_id: value(body, "zoneId") || null, name, active: true }) });
+      const [level] = await supabaseRest<Array<{ parent_level_id: string | null }>>(`location_levels?select=parent_level_id&id=eq.${encodeURIComponent(levelId)}&limit=1`, auth.token);
+      if (!level) return Response.json({ error: "This location level is unavailable." }, { status: 404 });
+      const parentOptionId = value(body, "parentOptionId", 80);
+      if (level.parent_level_id && !parentOptionId) return Response.json({ error: "Select the preceding location value first." }, { status: 400 });
+      if (!level.parent_level_id && parentOptionId) return Response.json({ error: "This level does not use a preceding custom level." }, { status: 400 });
+      await supabaseRest("location_options", auth.token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ level_id: levelId, building_id: value(body, "buildingId") || null, floor_id: value(body, "floorId") || null, zone_id: value(body, "zoneId") || null, office_id: value(body, "officeId") || null, parent_option_id: parentOptionId || null, name, active: true }) });
     } else if (action === "deleteLocationOption") {
       const id = value(body, "id"); if (!id) return Response.json({ error: "Location option is required." }, { status: 400 });
       await supabaseRest(`location_options?id=eq.${encodeURIComponent(id)}`, auth.token, { method: "DELETE", headers: { Prefer: "return=minimal" } });
@@ -291,14 +376,33 @@ export async function POST(request: Request) {
       if (!email || !email.includes("@")) return Response.json({ error: "A valid user email is required." }, { status: 400 });
       if (!name) return Response.json({ error: "User name is required." }, { status: 400 });
       if (action === "createUser" && !validPassword(password)) return Response.json({ error: "Password must be at least 10 characters and include uppercase, lowercase, number and symbol." }, { status: 400 });
-      const rows = await supabaseRest<Actor[]>("app_users?on_conflict=email", auth.token, { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify({ email, name, role, active: true }) });
+      if (action === "createUser") assertSupabaseAdminConfigured();
+      const targetUserId = value(body, "userId");
+      const previousRows = action === "createUser"
+        ? await supabaseRest<Actor[]>(`app_users?select=id,user_id,email,name,role,active&email=eq.${encodeURIComponent(email)}&limit=1`, auth.token)
+        : await supabaseRest<Actor[]>(`app_users?select=id,user_id,email,name,role,active&id=eq.${encodeURIComponent(targetUserId)}&limit=1`, auth.token);
+      if (action === "createUser" && previousRows[0]?.user_id) return Response.json({ error: "A login account already exists for this email." }, { status: 409 });
+      if (action === "upsertUser" && !previousRows[0]) return Response.json({ error: "The user account was not found." }, { status: 404 });
+      if (action === "upsertUser" && isSuperAdminEmail(previousRows[0].email) && previousRows[0].email !== email) return Response.json({ error: "The super administrator identity cannot be changed." }, { status: 409 });
+      if (action === "upsertUser" && previousRows[0].user_id && (previousRows[0].email !== email || previousRows[0].name !== name)) {
+        assertSupabaseAdminConfigured();
+        await updateSupabaseUserIdentity(previousRows[0].user_id, email, name);
+      }
+      const rows = action === "createUser"
+        ? await supabaseRest<Actor[]>("app_users?on_conflict=email", auth.token, { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=representation" }, body: JSON.stringify({ email, name, role, active: true }) })
+        : await supabaseRest<Actor[]>(`app_users?id=eq.${encodeURIComponent(targetUserId)}`, auth.token, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ email, name, role, active: true }) });
       const appUserId = rows[0]?.id; if (!appUserId) throw new Error("The user profile could not be saved.");
-      await supabaseRest(`user_projects?app_user_id=eq.${encodeURIComponent(appUserId)}`, auth.token, { method: "DELETE", headers: { Prefer: "return=minimal" } });
-      if (projectIds.length) await supabaseRest("user_projects", auth.token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(projectIds.map(projectId => ({ app_user_id: appUserId, project_id: projectId }))) });
       // Pre-approve the profile first; migration 007 then links the Auth row.
       if (action === "createUser" && !rows[0]?.user_id) {
-        await createSupabasePasswordUser(email, name, password);
+        try { await createSupabasePasswordUser(email, name, password); }
+        catch (reason) {
+          if (!previousRows[0]) await supabaseRest(`app_users?id=eq.${encodeURIComponent(appUserId)}`, auth.token, { method: "DELETE", headers: { Prefer: "return=minimal" } }).catch(() => undefined);
+          else await supabaseRest(`app_users?id=eq.${encodeURIComponent(appUserId)}`, auth.token, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ name: previousRows[0].name, role: previousRows[0].role, active: previousRows[0].active }) }).catch(() => undefined);
+          throw reason;
+        }
       }
+      await supabaseRest(`user_projects?app_user_id=eq.${encodeURIComponent(appUserId)}`, auth.token, { method: "DELETE", headers: { Prefer: "return=minimal" } });
+      if (projectIds.length) await supabaseRest("user_projects", auth.token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(projectIds.map(projectId => ({ app_user_id: appUserId, project_id: projectId }))) });
       const permissions = normalizeModulePermissions(body.modulePermissions, role, isSuperAdminEmail(email));
       await supabaseRest(`user_module_permissions?app_user_id=eq.${encodeURIComponent(appUserId)}`, auth.token, { method: "DELETE", headers: { Prefer: "return=minimal" } });
       await supabaseRest("user_module_permissions", auth.token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(permissions.map((permission: ModulePermission) => ({ app_user_id: appUserId, module_key: permission.module, can_view: permission.view, can_create: permission.create, can_edit: permission.edit, can_delete: permission.delete, can_approve: permission.approve, can_export: permission.export }))) });
@@ -344,7 +448,7 @@ export async function POST(request: Request) {
       await supabaseRest("rpc/publish_survey_config", auth.token, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ target_config_id: configId }) });
     } else return Response.json({ error: "Unsupported administration action." }, { status: 400 });
     const snapshot = await optimizedConfig(auth.token, "admin");
-    const config = snapshot?.actor ? assembleConfig(snapshot) : await configFor(auth.actor, auth.token);
+    const config = await attachAssetCategories(snapshot?.actor ? assembleConfig(snapshot) : await configFor(auth.actor, auth.token), auth.token);
     return Response.json(config);
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "The change could not be saved." }, { status: 500 }); }
 }

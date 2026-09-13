@@ -6,8 +6,8 @@ import { apiGet, ApiClientError } from "./api-client";
 export type StructureFloor = { id: string; name: string; sortOrder: number };
 export type StructureZone = { id: string; floorId: string | null; name: string };
 export type StructureOffice = { id: string; floorId: string | null; zoneId: string | null; name: string };
-export type StructureLocationOption = { id: string; buildingId: string | null; floorId: string | null; zoneId: string | null; name: string };
-export type StructureLocationLevel = { id: string; key: string; labelAr: string; labelEn: string; required: boolean; sortOrder: number; options: StructureLocationOption[] };
+export type StructureLocationOption = { id: string; buildingId: string | null; floorId: string | null; zoneId: string | null; officeId: string | null; parentOptionId: string | null; name: string };
+export type StructureLocationLevel = { id: string; key: string; labelAr: string; labelEn: string; required: boolean; sortOrder: number; parentLevelId: string; options: StructureLocationOption[] };
 export type StructureBuilding = { id: string; name: string; floors: StructureFloor[]; zones: StructureZone[]; offices: StructureOffice[] };
 export type StructureProject = {
   id: string; name: string; requireBuilding: boolean; requireFloor: boolean; requireZone: boolean; requireOffice: boolean; allowManual: boolean;

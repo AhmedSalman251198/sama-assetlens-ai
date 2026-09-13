@@ -6,7 +6,9 @@ type ActorRow = { id: string; email: string; name: string; role: UserRole; activ
 type PermissionRow = { module_key: ModuleKey; can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean; can_approve: boolean; can_export: boolean };
 
 export function mapPermissionRows(rows: PermissionRow[], role: UserRole, superAdmin = false): ModulePermission[] {
-  if (superAdmin) return defaultModulePermissions("admin");
+  if (superAdmin) return defaultModulePermissions("admin").map(permission =>
+    permission.module === "assistant" || permission.module === "ai_reports"
+      ? { ...permission, view: true, create: true, edit: true, delete: true, approve: true, export: true } : permission);
   if (!rows.length) return defaultModulePermissions(role);
   const byModule = new Map(rows.map(row => [row.module_key, row]));
   return defaultModulePermissions(role).map(fallback => {
