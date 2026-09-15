@@ -4,11 +4,12 @@ import { canUseModule } from "../../lib/module-permissions";
 import { moduleAccessFor } from "../../lib/server/module-access";
 import { requestToken, supabaseRest, supabaseRestAll, verifyAuthUser } from "../../lib/server/supabase";
 import { dependencyImpact, type AssetDependency, type IntelligenceAsset } from "../../lib/asset-intelligence";
+import { apiErrorResponse } from "../../lib/server/api-errors";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-type AssetRow = { id: string; asset_no: string; project_id: string; asset_type: string; building_name: string; floor_name: string; zone_name: string; office_name: string; fields: IntelligenceAsset["fields"]; condition_rating: number | null; criticality_rating: number | null; operational_status: string; replacement_cost: number | null; price_currency: string | null; remaining_life_years: number | null };
+type AssetRow = { id: string; asset_no: string; project_id: string; asset_type: string; building_name: string; floor_name: string; zone_name: string; office_name: string; fields: IntelligenceAsset["fields"]; condition_rating: number | null; criticality_rating: number | null; operational_status: string; status: string; replacement_cost: number | null; price_currency: string | null; remaining_life_years: number | null };
 type DependencyRow = { upstream_asset_id: string; downstream_asset_id: string; dependency_type: string; impact: AssetDependency["impact"] };
 const noStore = { "Cache-Control": "private, no-store" };
 const uuid = (value: unknown) => typeof value === "string" && /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(value) ? value : "";
@@ -31,7 +32,7 @@ export async function GET(request: Request) {
     if (!authorized) return Response.json({ error: "Assistant access is not permitted." }, { status: 403 });
     const projects = await allowedProjects(authorized.token);
     return Response.json({ projects }, { headers: noStore });
-  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to open the assistant." }, { status: 500 }); }
+  } catch (error) { return apiErrorResponse(error, "تعذر فتح المساعد الذكي."); }
 }
 
 export async function POST(request: Request) {
@@ -42,8 +43,8 @@ export async function POST(request: Request) {
     const projectId = uuid(body.projectId);
     const projects = await allowedProjects(authorized.token);
     if (!projects.some(project => project.id === projectId)) return Response.json({ error: "Choose an accessible project." }, { status: 400 });
-    const rows = await supabaseRestAll<AssetRow>(`assets?select=id,asset_no,project_id,asset_type,building_name,floor_name,zone_name,office_name,fields,condition_rating,criticality_rating,operational_status,replacement_cost,price_currency,remaining_life_years&project_id=eq.${encodeURIComponent(projectId)}&archived_at=is.null&status=in.(review,completed)`, authorized.token);
-    const assets: IntelligenceAsset[] = rows.map(row => ({ id: row.id, assetNo: row.asset_no, projectId: row.project_id, assetType: row.asset_type || "Unclassified Asset", building: row.building_name || "Unassigned", location: [row.building_name, row.floor_name, row.zone_name, row.office_name].filter(Boolean).join(" / ") || "Unassigned", conditionRating: row.condition_rating, criticalityRating: row.criticality_rating, operationalStatus: row.operational_status || "unknown", replacementCost: row.replacement_cost, priceCurrency: row.price_currency || "AED", remainingLifeYears: row.remaining_life_years, fields: Array.isArray(row.fields) ? row.fields : [] }));
+    const rows = await supabaseRestAll<AssetRow>(`assets?select=id,asset_no,project_id,asset_type,building_name,floor_name,zone_name,office_name,fields,condition_rating,criticality_rating,operational_status,status,replacement_cost,price_currency,remaining_life_years&project_id=eq.${encodeURIComponent(projectId)}&archived_at=is.null&status=in.(review,completed)`, authorized.token);
+    const assets: IntelligenceAsset[] = rows.map(row => ({ id: row.id, assetNo: row.asset_no, projectId: row.project_id, assetType: row.asset_type || "Unclassified Asset", building: row.building_name || "Unassigned", location: [row.building_name, row.floor_name, row.zone_name, row.office_name].filter(Boolean).join(" / ") || "Unassigned", conditionRating: row.condition_rating, criticalityRating: row.criticality_rating, operationalStatus: row.operational_status || "unknown", workflowStatus: row.status, replacementCost: row.replacement_cost, priceCurrency: row.price_currency || "AED", remainingLifeYears: row.remaining_life_years, fields: Array.isArray(row.fields) ? row.fields : [] }));
     const language = body.language === "en" ? "en" : "ar";
     if (body.action === "compare") {
       const asset = assets.find(item => item.id === uuid(body.assetId));
@@ -72,6 +73,27 @@ export async function POST(request: Request) {
     if (question.length < 3) return Response.json({ error: "Enter a question about your assets." }, { status: 400 });
     const history = Array.isArray(body.history) ? body.history.slice(-6).filter((entry): entry is { role: "user" | "assistant"; text: string } => Boolean(entry && typeof entry === "object" && (entry.role === "user" || entry.role === "assistant") && typeof entry.text === "string")).map(entry => ({ role: entry.role, text: entry.text.slice(0, 500) })) : [];
     const answer = await answerAssetLens(question, assets, language, history);
-    return Response.json(answer, { headers: noStore });
-  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Assistant request failed." }, { status: 500 }); }
+    const selectedProject = projects.find(project => project.id === projectId);
+    const plan = "plan" in answer ? answer.plan : undefined;
+    const registerParams = new URLSearchParams({ project: projectId });
+    if (plan?.building) registerParams.set("building", plan.building);
+    if (plan?.assetType) registerParams.set("assetType", plan.assetType);
+    if (plan?.operationalStatus) registerParams.set("operationalStatus", plan.operationalStatus);
+    if (plan?.conditionMin === plan?.conditionMax && plan?.conditionMin)
+      registerParams.set("condition", String(plan.conditionMin));
+    if (plan?.criticalityMin === plan?.criticalityMax && plan?.criticalityMin)
+      registerParams.set("criticality", String(plan.criticalityMin));
+    if (answer.matches?.length === 1 && answer.totalMatches === 1)
+      registerParams.set("asset", answer.matches[0].assetNo);
+    return Response.json({
+      ...answer,
+      scope: {
+        projectId,
+        projectName: selectedProject?.name || "",
+        building: plan?.building || "",
+      },
+      source: answer.source,
+      registerUrl: `/reports?${registerParams.toString()}`,
+    }, { headers: noStore });
+  } catch (error) { return apiErrorResponse(error, "تعذر إكمال طلب المساعد الذكي."); }
 }

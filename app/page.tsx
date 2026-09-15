@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, ApiClientError } from "./lib/api-client";
+import { assetListHref, type AssetListFilters } from "./lib/asset-list-filters";
 import { ASSET_CRITICALITY_LEVELS } from "./lib/asset-criticality";
 import { languageText, useUiLanguage } from "./lib/use-ui-language";
 import type { UiLanguage } from "./lib/ui-preferences";
 
 type DashboardData = {
-  currentUser: { name: string; email: string; role: "admin" | "surveyor" };
+  currentUser: { name: string; email: string; role: "admin" | "project_manager" | "reviewer" | "surveyor" | "viewer" };
   metrics: { totalAssets: number; approvedAssets: number; reviewAssets: number; activeQueue: number; failedAssets: number; projects: number; buildings: number; floors: number; zones: number };
   status: { approved: number; review: number; queued: number; processing: number; failed: number };
   health: { qualityScore: number; completionRate: number };
@@ -28,7 +29,7 @@ function SparkIcon({ name }: { name: "assets" | "approved" | "review" | "queue" 
   return <svg {...props}><path d="M4 12a8 8 0 1 0 8-8M4 4v5h5"/><path d="M12 8v5l3 2"/></svg>;
 }
 
-function CriticalityRadialChart({ distribution, language }: { distribution: DashboardData["criticality"]["distribution"]; language: UiLanguage }) {
+function CriticalityRadialChart({ distribution, language, scope }: { distribution: DashboardData["criticality"]["distribution"]; language: UiLanguage; scope: Partial<AssetListFilters> }) {
   const radius = 72;
   const circumference = 2 * Math.PI * radius;
   const countByRating = new Map(distribution.map(item => [item.rating, item.count]));
@@ -40,7 +41,7 @@ function CriticalityRadialChart({ distribution, language }: { distribution: Dash
     const precedingCount = [...ASSET_CRITICALITY_LEVELS].reverse().slice(0, 5 - level.rating).reduce((sum, previous) => sum + (countByRating.get(previous.rating) || 0), 0);
     return { level, count, length, dashOffset: total ? -(precedingCount / total) * circumference : 0 };
   });
-  return <div className="dash-criticality-radial"><div className="radial-chart"><svg viewBox="0 0 180 180" role="img" aria-label={language === "ar" ? "عدد الأصول في كل مستوى أهمية" : "Asset count by criticality level"}><circle className="radial-track" cx="90" cy="90" r={radius}/>{segments.map(({ level, count, length, dashOffset }) => <circle className="radial-segment" key={level.rating} cx="90" cy="90" r={radius} stroke={colors[level.rating]} strokeDasharray={`${length} ${Math.max(0, circumference - length)}`} strokeDashoffset={dashOffset}><title>{language === "ar" ? level.labelAr : level.labelEn}: {count}</title></circle>)}</svg><div><strong>{total.toLocaleString(language === "ar" ? "ar-AE" : "en-GB")}</strong><span>{language === "ar" ? "إجمالي الأصول" : "Total assets"}</span></div></div><div className="radial-legend">{[...ASSET_CRITICALITY_LEVELS].reverse().map(level => { const count = countByRating.get(level.rating) || 0; return <Link href={`/reports?criticality=${level.rating}`} className={`criticality-${level.rating}`} key={level.rating}><i style={{ background: colors[level.rating] }}/><span>{language === "ar" ? level.labelAr : level.labelEn}<small>{language === "ar" ? "وزن" : "Weight"} {level.weight}</small></span><strong>{count.toLocaleString(language === "ar" ? "ar-AE" : "en-GB")}</strong></Link>; })}</div></div>;
+  return <div className="dash-criticality-radial"><div className="radial-chart"><svg viewBox="0 0 180 180" role="img" aria-label={language === "ar" ? "عدد الأصول في كل مستوى أهمية" : "Asset count by criticality level"}><circle className="radial-track" cx="90" cy="90" r={radius}/>{segments.map(({ level, count, length, dashOffset }) => <circle className="radial-segment" key={level.rating} cx="90" cy="90" r={radius} stroke={colors[level.rating]} strokeDasharray={`${length} ${Math.max(0, circumference - length)}`} strokeDashoffset={dashOffset}><title>{language === "ar" ? level.labelAr : level.labelEn}: {count}</title></circle>)}</svg><div><strong>{total.toLocaleString(language === "ar" ? "ar-AE" : "en-GB")}</strong><span>{language === "ar" ? "إجمالي الأصول" : "Total assets"}</span></div></div><div className="radial-legend">{[...ASSET_CRITICALITY_LEVELS].reverse().map(level => { const count = countByRating.get(level.rating) || 0; return <Link href={assetListHref(scope, { criticality: String(level.rating) })} className={`criticality-${level.rating}`} key={level.rating}><i style={{ background: colors[level.rating] }}/><span>{language === "ar" ? level.labelAr : level.labelEn}<small>{language === "ar" ? "وزن" : "Weight"} {level.weight}</small></span><strong>{count.toLocaleString(language === "ar" ? "ar-AE" : "en-GB")}</strong></Link>; })}</div></div>;
 }
 
 export default function DashboardPage() {
@@ -80,6 +81,7 @@ export default function DashboardPage() {
   const filterProject = structure?.projects.find(project => project.id === filters.project);
   const filterBuilding = filterProject?.buildings.find(building => building.id === filters.building);
   const filterZones = filterBuilding?.zones.filter(zone => !filters.floor || !zone.floorId || zone.floorId === filters.floor) || [];
+  const assetListScope = { project: filters.project, building: filters.building, floor: filters.floor, zone: filters.zone };
   const criticality = data?.criticality || { weightedIssuePercent: 0, problemWeight: 0, totalWeight: 0, problemAssets: 0, totalAssets: 0, distribution: [] };
   const criticalityByRating = new Map(criticality.distribution.map(item => [item.rating, item.count]));
 
@@ -88,7 +90,7 @@ export default function DashboardPage() {
       <div><span className="al-page-kicker">Asset intelligence</span><h2>{data ? l(`مرحبًا، ${data.currentUser.name}`, `Welcome, ${data.currentUser.name}`) : l("لوحة متابعة الأصول", "Asset intelligence dashboard")}</h2><p>{l("صورة تشغيلية سريعة لجودة البيانات، نشاط التحليل، والمشاريع—بدون تحميل سجل الأصول كاملًا.", "A fast operational view of data quality, analysis activity and projects without loading the full register.")}</p></div>
       <div className="al-page-actions"><button className="al-secondary-button" disabled={refreshing} onClick={() => void loadDashboard(true)}>{refreshing ? l("جاري التحديث…", "Refreshing…") : l("تحديث البيانات", "Refresh")}</button><Link className="al-secondary-button" href="/reports">{l("فتح التقارير", "Open reports")}</Link><Link className="al-primary-button" href="/capture">＋ {l("التقاط أصل جديد", "Capture asset")}</Link></div>
     </header>
-    {data?.currentUser.role === "admin" && structure && <section className="dashboard-filters" aria-label="فلاتر لوحة التحكم">
+    {data && structure && <section className="dashboard-filters" aria-label={l("فلاتر لوحة التحكم", "Dashboard filters")}>
       <div><strong>{l("تصفية لوحة التحكم", "Dashboard filters")}</strong><small>{l("كل الأرقام والرسوم تتغير حسب الاختيار", "All metrics and charts respond to the selection")}</small></div>
       <select aria-label={l("المشروع أو الفرع", "Project or branch")} value={filters.project} onChange={event => setFilters({ project: event.target.value, building: "", floor: "", zone: "" })}><option value="">{l("كل المشاريع / الفروع", "All projects / branches")}</option>{structure.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
       <select aria-label={l("المبنى", "Building")} value={filters.building} disabled={!filterProject} onChange={event => setFilters(current => ({ ...current, building: event.target.value, floor: "", zone: "" }))}><option value="">{l("كل المباني", "All buildings")}</option>{filterProject?.buildings.map(building => <option key={building.id} value={building.id}>{building.name}</option>)}</select>
@@ -100,17 +102,17 @@ export default function DashboardPage() {
     {!data && !error ? <div className="al-loading-grid" aria-label={l("جاري تحميل لوحة التحكم", "Loading dashboard")}><div className="al-skeleton"/><div className="al-skeleton"/><div className="al-skeleton"/><div className="al-skeleton"/></div> : data && <>
       <div className="dashboard-metrics">
         {[
-          { label:l("إجمالي الأصول", "Total assets"), value:data.metrics.totalAssets, hint:l(`${data.metrics.projects} مشاريع متاحة`, `${data.metrics.projects} available projects`), icon:"assets" as const, tone:"navy" },
-          { label:l("الأصول المعتمدة", "Approved assets"), value:data.metrics.approvedAssets, hint:l(`${data.health.qualityScore}% جودة السجل`, `${data.health.qualityScore}% register quality`), icon:"approved" as const, tone:"green" },
-          { label:l("تحتاج مراجعة", "Needs review"), value:data.metrics.reviewAssets, hint:data.metrics.failedAssets ? l(`${data.metrics.failedAssets} عمليات فاشلة`, `${data.metrics.failedAssets} failed operations`) : l("لا توجد أخطاء حرجة", "No critical errors"), icon:"review" as const, tone:"amber" },
-          { label:l("خط المعالجة", "Processing queue"), value:data.metrics.activeQueue, hint:data.status.processing ? l(`${data.status.processing} قيد التحليل الآن`, `${data.status.processing} processing now`) : l("الطابور مستقر", "Queue is stable"), icon:"queue" as const, tone:"teal" },
-          { label:l("الأصول الحرجة", "Critical assets"), value:criticalityByRating.get(5) || 0, hint:l(`${criticalityByRating.get(4) || 0} أصول عالية الأهمية`, `${criticalityByRating.get(4) || 0} high-criticality assets`), icon:"critical" as const, tone:"red" },
-        ].map(metric => <article className={`dashboard-metric ${metric.tone}`} key={metric.label}><span><SparkIcon name={metric.icon}/></span><div><small>{metric.label}</small><strong>{metric.value.toLocaleString(language === "ar" ? "ar-AE" : "en-GB")}</strong><em>{metric.hint}</em></div></article>)}
+          { label:l("إجمالي الأصول", "Total assets"), value:data.metrics.totalAssets, hint:l(`${data.metrics.projects} مشاريع متاحة`, `${data.metrics.projects} available projects`), icon:"assets" as const, tone:"navy", href: assetListHref(assetListScope) },
+          { label:l("الأصول المعتمدة", "Approved assets"), value:data.metrics.approvedAssets, hint:l(`${data.health.qualityScore}% جودة السجل`, `${data.health.qualityScore}% register quality`), icon:"approved" as const, tone:"green", href: assetListHref(assetListScope, { status: "completed" }) },
+          { label:l("تحتاج مراجعة", "Needs review"), value:data.metrics.reviewAssets, hint:data.metrics.failedAssets ? l(`${data.metrics.failedAssets} عمليات فاشلة`, `${data.metrics.failedAssets} failed operations`) : l("لا توجد أخطاء حرجة", "No critical errors"), icon:"review" as const, tone:"amber", href: assetListHref(assetListScope, { status: "review" }) },
+          { label:l("خط المعالجة", "Processing queue"), value:data.metrics.activeQueue, hint:data.status.processing ? l(`${data.status.processing} قيد التحليل الآن`, `${data.status.processing} processing now`) : l("الطابور مستقر", "Queue is stable"), icon:"queue" as const, tone:"teal", href: assetListHref(assetListScope, { workflow: "active" }) },
+          { label:l("الأصول الحرجة", "Critical assets"), value:criticalityByRating.get(5) || 0, hint:l(`${criticalityByRating.get(4) || 0} أصول عالية الأهمية`, `${criticalityByRating.get(4) || 0} high-criticality assets`), icon:"critical" as const, tone:"red", href: assetListHref(assetListScope, { criticality: "5" }) },
+        ].map(metric => <Link className={`dashboard-metric ${metric.tone}`} href={metric.href} key={metric.label} aria-label={`${metric.label}: ${metric.value}`}><span><SparkIcon name={metric.icon}/></span><div><small>{metric.label}</small><strong>{metric.value.toLocaleString(language === "ar" ? "ar-AE" : "en-GB")}</strong><em>{metric.hint}</em></div></Link>)}
       </div>
       <div className="dashboard-main-grid">
-        <article className="al-card dash-activity-card"><div className="al-card-head"><div><h3>{l("توزيع أهمية الأصول", "Asset criticality distribution")}</h3><p>{l("رسم شعاعي يوضح عدد الأصول في كل مستوى", "Radial chart showing the number of assets at every criticality level")}</p></div><span className="dash-live"><i/> {l("بيانات مباشرة", "Live data")}</span></div><CriticalityRadialChart distribution={criticality.distribution} language={language}/></article>
+        <article className="al-card dash-activity-card"><div className="al-card-head"><div><h3>{l("توزيع أهمية الأصول", "Asset criticality distribution")}</h3><p>{l("رسم شعاعي يوضح عدد الأصول في كل مستوى", "Radial chart showing the number of assets at every criticality level")}</p></div><span className="dash-live"><i/> {l("بيانات مباشرة", "Live data")}</span></div><CriticalityRadialChart distribution={criticality.distribution} language={language} scope={assetListScope}/></article>
         <article className="al-card dash-quality-card"><div className="al-card-head"><div><h3>{l("جودة السجل", "Register quality")}</h3><p>{l("جاهزية البيانات للمراجعة والتسليم", "Data readiness for review and handover")}</p></div></div><div className="dash-quality-body"><div className="dash-quality-ring" style={{ "--quality": `${data.health.qualityScore * 3.6}deg` } as CSSProperties}><strong>{data.health.qualityScore}%</strong><span>{l("جودة البيانات", "Data quality")}</span></div><div className="dash-status-list">
-          {[{key:"approved",label:l("معتمدة", "Approved"),value:data.status.approved},{key:"review",label:l("مراجعة", "Review"),value:data.status.review},{key:"queued",label:l("انتظار", "Queued"),value:data.status.queued},{key:"failed",label:l("فشل", "Failed"),value:data.status.failed}].map(item => <div key={item.key}><span><i className={item.key}/>{item.label}</span><strong>{item.value}</strong><em><b style={{ width:`${totalStatus ? Math.max(3,(item.value/totalStatus)*100) : 0}%` }}/></em></div>)}
+          {[{key:"completed",tone:"approved",label:l("معتمدة", "Approved"),value:data.status.approved},{key:"review",tone:"review",label:l("مراجعة", "Review"),value:data.status.review},{key:"queued",tone:"queued",label:l("انتظار", "Queued"),value:data.status.queued},{key:"failed",tone:"failed",label:l("فشل", "Failed"),value:data.status.failed}].map(item => <Link href={assetListHref(assetListScope, { status: item.key })} key={item.key}><span><i className={item.tone}/>{item.label}</span><strong>{item.value}</strong><em><b style={{ width:`${totalStatus ? Math.max(3,(item.value/totalStatus)*100) : 0}%` }}/></em></Link>)}
         </div></div></article>
       </div>
       <div className="dashboard-lower-grid">

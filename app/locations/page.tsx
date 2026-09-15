@@ -2,14 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, invalidateApiCache } from "../lib/api-client";
+import { parseAssetListFilters } from "../lib/asset-list-filters";
 import { getAccessToken } from "../lib/supabase-auth";
 import { ASSET_CONDITION_LEVELS, assetConditionLabel } from "../lib/asset-condition";
 import { ASSET_CRITICALITY_LEVELS, assetCriticalityLabel, assetCriticalityWeight } from "../lib/asset-criticality";
 import { ASSET_OPERATIONAL_STATUSES, AssetOperationalStatus, assetOperationalStatusLabel } from "../lib/asset-operational-status";
 import { AssetCategory } from "../lib/asset-categories";
 import { readUiLanguage, UI_LANGUAGE_EVENT, UiLanguage } from "../lib/ui-preferences";
+import { PaginationJump } from "../components/pagination-jump";
 
-type Project = { id: string; name: string; categoryIds: string[] };
+type StructureFloor = { id: string; name: string };
+type StructureZone = { id: string; name: string; floorId: string | null };
+type StructureBuilding = { id: string; name: string; floors: StructureFloor[]; zones: StructureZone[] };
+type Project = { id: string; name: string; categoryIds: string[]; buildings: StructureBuilding[] };
 type Config = { projects: Project[]; categories: AssetCategory[] };
 type Asset = {
   id: string; assetNo: string; assetType: string; summary: string; manufacturer: string; model: string; serial: string;
@@ -40,6 +45,11 @@ export default function AssetManagementPage() {
   const [operationalStatus, setOperationalStatus] = useState("");
   const [condition, setCondition] = useState("");
   const [criticality, setCriticality] = useState("");
+  const [building, setBuilding] = useState("");
+  const [floor, setFloor] = useState("");
+  const [zone, setZone] = useState("");
+  const [workflow, setWorkflow] = useState("");
+  const [routeReady, setRouteReady] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setLanguage(readUiLanguage()), 0);
@@ -48,32 +58,61 @@ export default function AssetManagementPage() {
     return () => { window.clearTimeout(timer); window.removeEventListener(UI_LANGUAGE_EVENT, listener); };
   }, []);
 
+  useEffect(() => {
+    const initial = parseAssetListFilters(new URLSearchParams(window.location.search));
+    const timer = window.setTimeout(() => {
+      setSearch(initial.search);
+      setProject(initial.project);
+      setBuilding(initial.building);
+      setFloor(initial.floor);
+      setZone(initial.zone);
+      setCategory(initial.category);
+      setOperationalStatus(initial.operationalStatus);
+      setCondition(initial.condition);
+      setCriticality(initial.criticality);
+      setWorkflow(initial.workflow || initial.status);
+      setPage(1);
+      setRouteReady(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   const query = useMemo(() => {
     const params = new URLSearchParams({ view: "manage", page: String(page), pageSize: "50" });
     if (search.trim()) params.set("search", search.trim());
     if (project) params.set("project", project);
+    if (building) params.set("building", building);
+    if (floor) params.set("floor", floor);
+    if (zone) params.set("zone", zone);
     if (category) params.set("category", category);
     if (operationalStatus) params.set("operationalStatus", operationalStatus);
     if (condition) params.set("condition", condition);
     if (criticality) params.set("criticality", criticality);
+    if (workflow === "active") params.set("workflow", "active");
+    else if (workflow) params.set("status", workflow);
     return `/api/assets?${params}`;
-  }, [page, search, project, category, operationalStatus, condition, criticality]);
+  }, [page, search, project, building, floor, zone, category, operationalStatus, condition, criticality, workflow]);
 
   const load = useCallback(async () => {
+    if (!routeReady) return;
     setLoading(true); setError("");
     try {
       const [assetPage, nextConfig] = await Promise.all([
-        apiGet<AssetPage>(query, { force: true, ttlMs: 0 }),
+        apiGet<AssetPage>(query, { force: true, ttlMs: 0, timeoutMs: 60_000 }),
         config ? Promise.resolve(config) : apiGet<Config>("/api/config?scope=structure", { ttlMs: 5 * 60_000 }),
       ]);
       setData(assetPage); setConfig(nextConfig);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "تعذر تحميل الأصول."); }
     finally { setLoading(false); }
-  }, [query, config]);
+  }, [query, config, routeReady]);
 
-  useEffect(() => { const timer = window.setTimeout(() => void load(), search ? 350 : 0); return () => window.clearTimeout(timer); }, [load, search]);
+  useEffect(() => { if (!routeReady) return; const timer = window.setTimeout(() => void load(), search ? 350 : 0); return () => window.clearTimeout(timer); }, [load, search, routeReady]);
 
   const categoryMap = useMemo(() => new Map((config?.categories || []).map(item => [item.id, item])), [config]);
+  const selectedProject = config?.projects.find(item => item.id === project);
+  const selectedBuilding = selectedProject?.buildings.find(item => item.id === building);
+  const availableFloors = selectedBuilding?.floors || [];
+  const availableZones = (selectedBuilding?.zones || []).filter(item => !floor || !item.floorId || item.floorId === floor);
   const categoriesForEdit = (config?.categories || []).filter(item => item.active !== false && config?.projects.find(projectItem => projectItem.id === editing?.projectId)?.categoryIds.includes(item.id));
   const pageCount = Math.max(1, Math.ceil(data.total / data.pageSize));
 
@@ -120,9 +159,13 @@ export default function AssetManagementPage() {
     {error && !editing && <div className="al-alert" role="alert">{error}</div>}{notice && <div className="al-success" role="status">✓ {notice}</div>}
     <section className="al-card asset-manager-filters">
       <label><span>{language === "ar" ? "بحث" : "Search"}</span><input value={search} onChange={event => { setSearch(event.target.value); setPage(1); }} placeholder={language === "ar" ? "رقم الأصل، النوع، الموقع…" : "Asset no., type or location…"} /></label>
-      <label><span>{language === "ar" ? "المشروع" : "Project"}</span><select value={project} onChange={event => { setProject(event.target.value); setPage(1); }}><option value="">{language === "ar" ? "كل المشاريع" : "All projects"}</option>{config?.projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label><span>{language === "ar" ? "المشروع" : "Project"}</span><select value={project} onChange={event => { setProject(event.target.value); setBuilding(""); setFloor(""); setZone(""); setPage(1); }}><option value="">{language === "ar" ? "كل المشاريع" : "All projects"}</option>{config?.projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label><span>{language === "ar" ? "المبنى / الموقع" : "Building / site"}</span><select value={building} disabled={!selectedProject} onChange={event => { setBuilding(event.target.value); setFloor(""); setZone(""); setPage(1); }}><option value="">{language === "ar" ? "كل المباني" : "All buildings"}</option>{selectedProject?.buildings.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label><span>{language === "ar" ? "الطابق" : "Floor"}</span><select value={floor} disabled={!selectedBuilding} onChange={event => { setFloor(event.target.value); setZone(""); setPage(1); }}><option value="">{language === "ar" ? "كل الطوابق" : "All floors"}</option>{availableFloors.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label><span>{language === "ar" ? "الزون / المنطقة" : "Zone / area"}</span><select value={zone} disabled={!selectedBuilding} onChange={event => { setZone(event.target.value); setPage(1); }}><option value="">{language === "ar" ? "كل الزونات" : "All zones"}</option>{availableZones.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <label><span>{language === "ar" ? "التصنيف" : "Category"}</span><select value={category} onChange={event => { setCategory(event.target.value); setPage(1); }}><option value="">{language === "ar" ? "كل التصنيفات" : "All categories"}</option>{config?.categories.filter(item => item.active !== false).map(item => <option key={item.id} value={item.id}>{language === "ar" ? item.labelAr : item.labelEn}</option>)}</select></label>
       <label><span>{language === "ar" ? "حالة التشغيل" : "Operational status"}</span><select value={operationalStatus} onChange={event => { setOperationalStatus(event.target.value); setPage(1); }}><option value="">{language === "ar" ? "كل الحالات" : "All statuses"}</option>{ASSET_OPERATIONAL_STATUSES.map(item => <option key={item.code} value={item.code}>{language === "ar" ? item.labelAr : item.labelEn}</option>)}</select></label>
+      <label><span>{language === "ar" ? "حالة السجل" : "Workflow status"}</span><select value={workflow} onChange={event => { setWorkflow(event.target.value); setPage(1); }}><option value="">{language === "ar" ? "كل الحالات" : "All workflow states"}</option><option value="completed">{language === "ar" ? "معتمدة" : "Approved"}</option><option value="review">{language === "ar" ? "تحتاج مراجعة" : "Needs review"}</option><option value="active">{language === "ar" ? "قيد التحليل" : "In analysis"}</option><option value="queued">{language === "ar" ? "في الانتظار" : "Queued"}</option><option value="processing">{language === "ar" ? "جاري التحليل" : "Processing"}</option><option value="failed">{language === "ar" ? "فشلت" : "Failed"}</option></select></label>
       <label><span>Condition</span><select value={condition} onChange={event => { setCondition(event.target.value); setPage(1); }}><option value="">{language === "ar" ? "كل التقييمات" : "All ratings"}</option>{ASSET_CONDITION_LEVELS.map(item => <option key={item.rating} value={item.rating}>{item.rating} — {language === "ar" ? item.labelAr : item.labelEn}</option>)}</select></label>
       <label><span>Criticality</span><select value={criticality} onChange={event => { setCriticality(event.target.value); setPage(1); }}><option value="">{language === "ar" ? "كل الأهميات" : "All criticalities"}</option>{ASSET_CRITICALITY_LEVELS.map(item => <option key={item.rating} value={item.rating}>{item.rating} — {language === "ar" ? item.labelAr : item.labelEn}</option>)}</select></label>
     </section>
@@ -136,7 +179,7 @@ export default function AssetManagementPage() {
         <div className="asset-manager-actions"><button className="al-primary-button" disabled={!asset.canEdit} onClick={() => openEditor(asset)}>{language === "ar" ? "تعديل الأصل" : "Edit asset"}</button><button className="al-secondary-button" disabled={!asset.canEdit || enrichingId === asset.id || !asset.manufacturer || !asset.model} onClick={() => void enrichAsset(asset)}>{enrichingId === asset.id ? (language === "ar" ? "جاري البحث…" : "Researching…") : (language === "ar" ? "جلب المواصفات" : "Enrich online")}</button></div>
       </article>;
     })}</div>}
-    <footer className="asset-manager-pagination"><button disabled={page <= 1 || loading} onClick={() => setPage(value => Math.max(1, value - 1))}>{language === "ar" ? "السابق" : "Previous"}</button><span>{page} / {pageCount}</span><button disabled={page >= pageCount || loading} onClick={() => setPage(value => value + 1)}>{language === "ar" ? "التالي" : "Next"}</button></footer>
+    <footer className="asset-manager-pagination"><button disabled={page <= 1 || loading} onClick={() => setPage(value => Math.max(1, value - 1))}>{language === "ar" ? "السابق" : "Previous"}</button><span>{page} / {pageCount}</span><PaginationJump page={page} pageCount={pageCount} busy={loading} language={language} onPageChange={setPage}/><button disabled={page >= pageCount || loading} onClick={() => setPage(value => value + 1)}>{language === "ar" ? "التالي" : "Next"}</button></footer>
     {editing && <div className="al-dialog-backdrop asset-editor-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !saving) setEditing(null); }}><section className="al-dialog asset-editor" role="dialog" aria-modal="true" aria-labelledby="asset-editor-title">
       <header><div><small>{editing.assetNo}</small><h3 id="asset-editor-title">{language === "ar" ? "تعديل الأصل وحالته" : "Edit asset and status"}</h3></div><button disabled={saving} onClick={() => setEditing(null)}>×</button></header>
       <div className="asset-editor-grid">

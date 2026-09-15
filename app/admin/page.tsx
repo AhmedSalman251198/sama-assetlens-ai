@@ -1,56 +1,359 @@
 "use client";
 
+import Image from "next/image";
 import { CSSProperties, FormEvent, useEffect, useMemo, useState } from "react";
 import { apiGet, ApiClientError, invalidateApiCache } from "../lib/api-client";
 import { getAccessToken, isStrongPassword } from "../lib/supabase-auth";
-import { defaultModulePermissions, MODULE_LABELS, ModuleAction, ModulePermission } from "../lib/module-permissions";
+import {
+  defaultModulePermissions,
+  MODULE_LABELS,
+  ModuleAction,
+  ModulePermission,
+} from "../lib/module-permissions";
 import { languageText, useUiLanguage } from "../lib/use-ui-language";
 
 type Floor = { id: string; name: string; sortOrder: number };
 type Zone = { id: string; floorId: string | null; name: string };
-type Office = { id: string; floorId: string | null; zoneId: string | null; name: string };
-type LocationOption = { id: string; buildingId: string | null; floorId: string | null; zoneId: string | null; officeId: string | null; parentOptionId: string | null; name: string };
-type LocationLevel = { id: string; key: string; labelAr: string; labelEn: string; required: boolean; sortOrder: number; parentLevelId: string; options: LocationOption[] };
-type Building = { id: string; name: string; floors: Floor[]; zones: Zone[]; offices: Office[] };
-type UserRole = "admin" | "project_manager" | "reviewer" | "surveyor" | "viewer";
+type Office = {
+  id: string;
+  floorId: string | null;
+  zoneId: string | null;
+  name: string;
+};
+type LocationOption = {
+  id: string;
+  buildingId: string | null;
+  floorId: string | null;
+  zoneId: string | null;
+  officeId: string | null;
+  parentOptionId: string | null;
+  name: string;
+};
+type LocationLevel = {
+  id: string;
+  key: string;
+  labelAr: string;
+  labelEn: string;
+  required: boolean;
+  sortOrder: number;
+  parentLevelId: string;
+  options: LocationOption[];
+};
+type Building = {
+  id: string;
+  name: string;
+  floors: Floor[];
+  zones: Zone[];
+  offices: Office[];
+};
+type UserRole =
+  "admin" | "project_manager" | "reviewer" | "surveyor" | "viewer";
 type FieldType = "text" | "textarea" | "number" | "date" | "select" | "boolean";
 type CustomOption = { code: string; labelAr: string; labelEn: string };
-type CustomField = { id: string; key: string; labelAr: string; labelEn: string; type: FieldType; enabled: boolean; required: boolean; options: CustomOption[]; sortOrder: number; helpAr: string; helpEn: string; assetTypes: string[]; unit: string; aiExtract: boolean; showInReports: boolean; showInQr: boolean };
-type AssetCategory = { id: string; code: string; labelAr: string; labelEn: string; color: string; icon: string; defaultUsefulLifeYears: number | null; defaultEstimatedPrice: number | null; currency: string; defaultCriticalityRating: number | null; technicalFields: string[]; active: boolean; sortOrder: number };
-type Project = { id: string; name: string; requireBuilding: boolean; requireFloor: boolean; requireZone: boolean; requireOffice: boolean; allowManual: boolean; categoryIds: string[]; buildings: Building[]; locationLevels: LocationLevel[]; publishedConfig: { id: string; version: number; publishedAt: string | null } | null; customFields: CustomField[]; draftConfig: { id: string; version: number; fields: CustomField[] } | null };
-type User = { id: string; user_id: string | null; email: string; name: string; role: UserRole; active: boolean; projectIds: string[]; modulePermissions: ModulePermission[] };
-type AuditLog = { id: number; actor_email: string; action: string; entity_type: string; entity_id: string | null; project_id: string | null; details: { asset_no?: string; status?: string; name?: string; active?: boolean }; created_at: string };
-type Config = { currentUser: { id: string; email: string; name: string; role: UserRole; isSuperAdmin: boolean; modulePermissions: ModulePermission[] }; projects: Project[]; categories: AssetCategory[]; users: User[]; auditLogs: AuditLog[] };
-type AdminDialog = { mode: "rename" | "confirm"; title: string; description: string; action: "archiveProject" | "updateBuilding" | "updateFloor" | "updateZone" | "updateOffice" | "archiveBuilding" | "deleteFloor" | "deleteZone" | "deleteOffice" | "deleteLocationLevel" | "deleteLocationOption"; id: string; value: string; extra?: Record<string, unknown> };
+type CustomField = {
+  id: string;
+  key: string;
+  labelAr: string;
+  labelEn: string;
+  type: FieldType;
+  enabled: boolean;
+  required: boolean;
+  options: CustomOption[];
+  sortOrder: number;
+  helpAr: string;
+  helpEn: string;
+  assetTypes: string[];
+  unit: string;
+  aiExtract: boolean;
+  showInReports: boolean;
+  showInQr: boolean;
+};
+type AssetCategory = {
+  id: string;
+  code: string;
+  labelAr: string;
+  labelEn: string;
+  color: string;
+  icon: string;
+  defaultUsefulLifeYears: number | null;
+  defaultEstimatedPrice: number | null;
+  currency: string;
+  defaultCriticalityRating: number | null;
+  technicalFields: string[];
+  active: boolean;
+  sortOrder: number;
+};
+type Project = {
+  id: string;
+  name: string;
+  requireBuilding: boolean;
+  requireFloor: boolean;
+  requireZone: boolean;
+  requireOffice: boolean;
+  allowManual: boolean;
+  clientLogoAvailable: boolean;
+  categoryIds: string[];
+  buildings: Building[];
+  locationLevels: LocationLevel[];
+  publishedConfig: {
+    id: string;
+    version: number;
+    publishedAt: string | null;
+  } | null;
+  customFields: CustomField[];
+  draftConfig: { id: string; version: number; fields: CustomField[] } | null;
+};
+type User = {
+  id: string;
+  user_id: string | null;
+  email: string;
+  name: string;
+  role: UserRole;
+  active: boolean;
+  projectIds: string[];
+  modulePermissions: ModulePermission[];
+  isSuperAdmin: boolean;
+};
+type AuditLog = {
+  id: number;
+  actor_email: string;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  project_id: string | null;
+  details: {
+    asset_no?: string;
+    status?: string;
+    name?: string;
+    active?: boolean;
+  };
+  created_at: string;
+};
+type Config = {
+  currentUser: {
+    id: string;
+    email: string;
+    name: string;
+    role: UserRole;
+    isSuperAdmin: boolean;
+    modulePermissions: ModulePermission[];
+  };
+  projects: Project[];
+  categories: AssetCategory[];
+  users: User[];
+  auditLogs: AuditLog[];
+};
+type AdminDialog = {
+  mode: "rename" | "confirm";
+  title: string;
+  description: string;
+  action:
+    | "archiveProject"
+    | "updateBuilding"
+    | "updateFloor"
+    | "updateZone"
+    | "updateOffice"
+    | "archiveBuilding"
+    | "deleteFloor"
+    | "deleteZone"
+    | "deleteOffice"
+    | "deleteLocationLevel"
+    | "deleteLocationOption";
+  id: string;
+  value: string;
+  extra?: Record<string, unknown>;
+};
 
 const requirementOptions = [
-  { key: "requireBuilding", labelAr: "المبنى / الموقع", labelEn: "Building / site", hintAr: "يجب تحديد موقع الأصل", hintEn: "Asset location is required" },
-  { key: "requireFloor", labelAr: "الطابق", labelEn: "Floor", hintAr: "يجب تحديد الطابق", hintEn: "Floor is required" },
-  { key: "requireZone", labelAr: "الزون / المنطقة", labelEn: "Zone / area", hintAr: "يجب تحديد الزون", hintEn: "Zone is required" },
-  { key: "allowManual", labelAr: "السماح بالإدخال اليدوي", labelEn: "Allow manual entry", hintAr: "عند عدم وجود القيمة في القائمة", hintEn: "When a value is not listed" },
+  {
+    key: "requireBuilding",
+    labelAr: "المبنى / الموقع",
+    labelEn: "Building / site",
+    hintAr: "يجب تحديد موقع الأصل",
+    hintEn: "Asset location is required",
+  },
+  {
+    key: "requireFloor",
+    labelAr: "الطابق",
+    labelEn: "Floor",
+    hintAr: "يجب تحديد الطابق",
+    hintEn: "Floor is required",
+  },
+  {
+    key: "requireZone",
+    labelAr: "الزون / المنطقة",
+    labelEn: "Zone / area",
+    hintAr: "يجب تحديد الزون",
+    hintEn: "Zone is required",
+  },
+  {
+    key: "allowManual",
+    labelAr: "السماح بالإدخال اليدوي",
+    labelEn: "Allow manual entry",
+    hintAr: "عند عدم وجود القيمة في القائمة",
+    hintEn: "When a value is not listed",
+  },
 ] as const;
 
 const successMessages: Record<string, string> = {
-    createProject: "تم حفظ المشروع وتصنيفات أصوله بنجاح.", updateProject: "تم تعديل المشروع ومتطلبات المسح.", archiveProject: "تمت أرشفة المشروع مع الحفاظ على سجلات أصوله.", setProjectCategories: "تم تحديث تصنيفات المشروع.", saveAssetCategory: "تم حفظ تصنيف الأصل.", setAssetCategoryActive: "تم تحديث حالة التصنيف.", deleteAssetCategory: "تم حذف التصنيف غير المستخدم.", addBuilding: "تمت إضافة المبنى / الموقع.", addFloor: "تمت إضافة الطابق.", addZone: "تمت إضافة الزون.", addOffice: "تمت إضافة المكتب / الغرفة.", updateBuilding: "تم تعديل اسم المبنى.", updateFloor: "تم تعديل الطابق.", updateZone: "تم تعديل الزون.", updateOffice: "تم تعديل المكتب.", archiveBuilding: "تمت أرشفة المبنى.", deleteFloor: "تم حذف الطابق.", deleteZone: "تم حذف الزون.", deleteOffice: "تم حذف المكتب.", addLocationLevel: "تمت إضافة مستوى مكاني مخصص.", updateLocationLevel: "تم تحديث المستوى المكاني.", deleteLocationLevel: "تم حذف المستوى مع الاحتفاظ بقيم الأصول السابقة.", addLocationOption: "تمت إضافة قيمة للمستوى المكاني.", deleteLocationOption: "تم حذف القيمة مع الاحتفاظ بسجلات الأصول السابقة.", createUser: "تم إنشاء الحساب ويمكن للمستخدم الدخول فورًا دون تأكيد بريد.", upsertUser: "تم حفظ المستخدم وصلاحياته.", setUserActive: "تم تحديث حالة المستخدم.", resetUserPassword: "تم تغيير كلمة مرور المستخدم.", createConfigDraft: "تم إنشاء مسودة من النسخة المنشورة.", saveCustomField: "تم حفظ الحقل داخل المسودة.", setCustomFieldEnabled: "تم تحديث حالة الحقل.", addSuggestedFields: "تمت إضافة حقول المسح والموبايل المقترحة إلى المسودة.", publishConfig: "تم نشر إعدادات المسح الجديدة.",
+  createProject: "تم حفظ المشروع وتصنيفات أصوله بنجاح.",
+  updateProject: "تم تعديل المشروع ومتطلبات المسح.",
+  archiveProject: "تمت أرشفة المشروع مع الحفاظ على سجلات أصوله.",
+  setProjectCategories: "تم تحديث تصنيفات المشروع.",
+  saveAssetCategory: "تم حفظ تصنيف الأصل.",
+  setAssetCategoryActive: "تم تحديث حالة التصنيف.",
+  deleteAssetCategory: "تم حذف التصنيف غير المستخدم.",
+  addBuilding: "تمت إضافة المبنى / الموقع.",
+  addFloor: "تمت إضافة الطابق.",
+  addZone: "تمت إضافة الزون.",
+  addOffice: "تمت إضافة المكتب / الغرفة.",
+  updateBuilding: "تم تعديل اسم المبنى.",
+  updateFloor: "تم تعديل الطابق.",
+  updateZone: "تم تعديل الزون.",
+  updateOffice: "تم تعديل المكتب.",
+  archiveBuilding: "تمت أرشفة المبنى.",
+  deleteFloor: "تم حذف الطابق.",
+  deleteZone: "تم حذف الزون.",
+  deleteOffice: "تم حذف المكتب.",
+  addLocationLevel: "تمت إضافة مستوى مكاني مخصص.",
+  updateLocationLevel: "تم تحديث المستوى المكاني.",
+  deleteLocationLevel: "تم حذف المستوى مع الاحتفاظ بقيم الأصول السابقة.",
+  addLocationOption: "تمت إضافة قيمة للمستوى المكاني.",
+  deleteLocationOption: "تم حذف القيمة مع الاحتفاظ بسجلات الأصول السابقة.",
+  createUser: "تم إنشاء الحساب ويمكن للمستخدم الدخول فورًا دون تأكيد بريد.",
+  upsertUser: "تم حفظ المستخدم وصلاحياته.",
+  setUserActive: "تم تحديث حالة المستخدم.",
+  resetUserPassword: "تم تغيير كلمة مرور المستخدم.",
+  createConfigDraft: "تم إنشاء مسودة من النسخة المنشورة.",
+  saveCustomField: "تم حفظ الحقل داخل المسودة.",
+  setCustomFieldEnabled: "تم تحديث حالة الحقل.",
+  addSuggestedFields: "تمت إضافة حقول المسح والموبايل المقترحة إلى المسودة.",
+  publishConfig: "تم نشر إعدادات المسح الجديدة.",
 };
 const successMessagesEn: Record<string, string> = {
-  createProject: "Project and categories saved.", updateProject: "Project requirements updated.", archiveProject: "Project archived while preserving asset history.", setProjectCategories: "Project categories updated.", saveAssetCategory: "Asset category saved.", setAssetCategoryActive: "Category status updated.", deleteAssetCategory: "Unused category deleted.", addBuilding: "Building / site added.", addFloor: "Floor added.", addZone: "Zone added.", addOffice: "Office / room added.", updateBuilding: "Building name updated.", updateFloor: "Floor updated.", updateZone: "Zone updated.", updateOffice: "Office updated.", archiveBuilding: "Building archived.", deleteFloor: "Floor deleted.", deleteZone: "Zone deleted.", deleteOffice: "Office deleted.", addLocationLevel: "Custom location level added.", updateLocationLevel: "Location level updated.", deleteLocationLevel: "Location level removed; historical asset values were preserved.", addLocationOption: "Location value added.", deleteLocationOption: "Location value removed; historical asset values were preserved.", createUser: "Account created and ready for direct sign-in.", upsertUser: "User and permissions saved.", setUserActive: "User status updated.", resetUserPassword: "User password changed.", createConfigDraft: "Draft created from the published version.", saveCustomField: "Field saved to the draft.", setCustomFieldEnabled: "Field status updated.", addSuggestedFields: "Suggested mobile survey fields added.", publishConfig: "New survey configuration published.",
+  createProject: "Project and categories saved.",
+  updateProject: "Project requirements updated.",
+  archiveProject: "Project archived while preserving asset history.",
+  setProjectCategories: "Project categories updated.",
+  saveAssetCategory: "Asset category saved.",
+  setAssetCategoryActive: "Category status updated.",
+  deleteAssetCategory: "Unused category deleted.",
+  addBuilding: "Building / site added.",
+  addFloor: "Floor added.",
+  addZone: "Zone added.",
+  addOffice: "Office / room added.",
+  updateBuilding: "Building name updated.",
+  updateFloor: "Floor updated.",
+  updateZone: "Zone updated.",
+  updateOffice: "Office updated.",
+  archiveBuilding: "Building archived.",
+  deleteFloor: "Floor deleted.",
+  deleteZone: "Zone deleted.",
+  deleteOffice: "Office deleted.",
+  addLocationLevel: "Custom location level added.",
+  updateLocationLevel: "Location level updated.",
+  deleteLocationLevel:
+    "Location level removed; historical asset values were preserved.",
+  addLocationOption: "Location value added.",
+  deleteLocationOption:
+    "Location value removed; historical asset values were preserved.",
+  createUser: "Account created and ready for direct sign-in.",
+  upsertUser: "User and permissions saved.",
+  setUserActive: "User status updated.",
+  resetUserPassword: "User password changed.",
+  createConfigDraft: "Draft created from the published version.",
+  saveCustomField: "Field saved to the draft.",
+  setCustomFieldEnabled: "Field status updated.",
+  addSuggestedFields: "Suggested mobile survey fields added.",
+  publishConfig: "New survey configuration published.",
 };
 
-const roleLabels: Record<UserRole, string> = { admin: "مدير النظام", project_manager: "مدير مشروع", reviewer: "مراجع", surveyor: "مسّاح ميداني", viewer: "مشاهد فقط" };
-const roleDescriptions: Record<UserRole, string> = { admin: "كل المشاريع والإعدادات، دون إدارة الحسابات إلا للسوبر أدمن.", project_manager: "إدارة الأصول والمراجعة والنقل في المشاريع المحددة.", reviewer: "مراجعة واعتماد أصول المشاريع المحددة.", surveyor: "التقاط وإضافة أصول المشاريع المحددة.", viewer: "قراءة الداشبورد والتقارير دون تعديل." };
-const roleLabelsEn: Record<UserRole, string> = { admin: "System administrator", project_manager: "Project manager", reviewer: "Reviewer", surveyor: "Field surveyor", viewer: "View only" };
-const roleDescriptionsEn: Record<UserRole, string> = { admin: "All projects and configuration; account management remains super-admin only.", project_manager: "Manage, review and transfer assets in assigned projects.", reviewer: "Review and approve assets in assigned projects.", surveyor: "Capture and add assets in assigned projects.", viewer: "Read dashboards and reports without changes." };
+const roleLabels: Record<UserRole, string> = {
+  admin: "مدير النظام",
+  project_manager: "مدير مشروع",
+  reviewer: "مراجع",
+  surveyor: "مسّاح ميداني",
+  viewer: "مشاهد فقط",
+};
+const roleDescriptions: Record<UserRole, string> = {
+  admin:
+    "إدارة الإعدادات داخل المشاريع المحددة؛ إدارة الحسابات والنطاق الشامل للسوبر أدمن فقط.",
+  project_manager: "إدارة الأصول والمراجعة والنقل في المشاريع المحددة.",
+  reviewer: "مراجعة واعتماد أصول المشاريع المحددة.",
+  surveyor: "التقاط وإضافة أصول المشاريع المحددة.",
+  viewer: "قراءة الداشبورد والتقارير دون تعديل.",
+};
+const roleLabelsEn: Record<UserRole, string> = {
+  admin: "System administrator",
+  project_manager: "Project manager",
+  reviewer: "Reviewer",
+  surveyor: "Field surveyor",
+  viewer: "View only",
+};
+const roleDescriptionsEn: Record<UserRole, string> = {
+  admin:
+    "Manage configuration inside assigned projects; accounts and global scope remain super-admin only.",
+  project_manager: "Manage, review and transfer assets in assigned projects.",
+  reviewer: "Review and approve assets in assigned projects.",
+  surveyor: "Capture and add assets in assigned projects.",
+  viewer: "Read dashboards and reports without changes.",
+};
 
-const fieldTypeLabels: Record<FieldType, string> = { text: "نص قصير", textarea: "نص طويل", number: "رقم", date: "تاريخ", select: "قائمة خيارات", boolean: "نعم / لا" };
-const fieldTypeLabelsEn: Record<FieldType, string> = { text: "Short text", textarea: "Long text", number: "Number", date: "Date", select: "Options list", boolean: "Yes / No" };
-const blankField = { id: "", key: "", labelAr: "", labelEn: "", type: "text" as FieldType, required: false, enabled: true, optionsText: "", sortOrder: 10, helpAr: "", helpEn: "", assetTypesText: "", unit: "", aiExtract: false, showInReports: true, showInQr: true };
+const fieldTypeLabels: Record<FieldType, string> = {
+  text: "نص قصير",
+  textarea: "نص طويل",
+  number: "رقم",
+  date: "تاريخ",
+  select: "قائمة خيارات",
+  boolean: "نعم / لا",
+};
+const fieldTypeLabelsEn: Record<FieldType, string> = {
+  text: "Short text",
+  textarea: "Long text",
+  number: "Number",
+  date: "Date",
+  select: "Options list",
+  boolean: "Yes / No",
+};
+const blankField = {
+  id: "",
+  key: "",
+  labelAr: "",
+  labelEn: "",
+  type: "text" as FieldType,
+  required: false,
+  enabled: true,
+  optionsText: "",
+  sortOrder: 10,
+  helpAr: "",
+  helpEn: "",
+  assetTypesText: "",
+  unit: "",
+  aiExtract: false,
+  showInReports: true,
+  showInQr: true,
+};
 
-async function readApiPayload<T extends { error?: string }>(response: Response, language: "ar" | "en") {
+async function readApiPayload<T extends { error?: string }>(
+  response: Response,
+  language: "ar" | "en",
+) {
   const responseText = await response.text();
-  if (!responseText) throw new Error(language === "ar" ? `الخادم أعاد استجابة فارغة (${response.status}). حاول مرة أخرى.` : `The server returned an empty response (${response.status}). Try again.`);
-  try { return JSON.parse(responseText) as T; }
-  catch { throw new Error(language === "ar" ? `تعذر قراءة استجابة الخادم (${response.status}). حاول مرة أخرى.` : `The server response could not be read (${response.status}). Try again.`); }
+  if (!responseText)
+    throw new Error(
+      language === "ar"
+        ? `الخادم أعاد استجابة فارغة (${response.status}). حاول مرة أخرى.`
+        : `The server returned an empty response (${response.status}). Try again.`,
+    );
+  try {
+    return JSON.parse(responseText) as T;
+  } catch {
+    throw new Error(
+      language === "ar"
+        ? `تعذر قراءة استجابة الخادم (${response.status}). حاول مرة أخرى.`
+        : `The server response could not be read (${response.status}). Try again.`,
+    );
+  }
 }
 
 export default function AdminPage() {
@@ -62,9 +365,24 @@ export default function AdminPage() {
   const [busy, setBusy] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [projectCategoryIds, setProjectCategoryIds] = useState<string[]>([]);
-  const [requirements, setRequirements] = useState({ requireBuilding: true, requireFloor: true, requireZone: false, requireOffice: false, allowManual: true });
+  const [requirements, setRequirements] = useState({
+    requireBuilding: true,
+    requireFloor: true,
+    requireZone: false,
+    requireOffice: false,
+    allowManual: true,
+  });
   const [editProjectName, setEditProjectName] = useState("");
-  const [editRequirements, setEditRequirements] = useState({ requireBuilding: true, requireFloor: true, requireZone: false, requireOffice: false, allowManual: true });
+  const [projectLogoFile, setProjectLogoFile] = useState<File | null>(null);
+  const [projectLogoPreview, setProjectLogoPreview] = useState("");
+  const [logoBusy, setLogoBusy] = useState(false);
+  const [editRequirements, setEditRequirements] = useState({
+    requireBuilding: true,
+    requireFloor: true,
+    requireZone: false,
+    requireOffice: false,
+    allowManual: true,
+  });
   const [projectId, setProjectId] = useState("");
   const [buildingId, setBuildingId] = useState("");
   const [floorId, setFloorId] = useState("");
@@ -88,267 +406,3394 @@ export default function AdminPage() {
   const [userPassword, setUserPassword] = useState("");
   const [userPasswordConfirm, setUserPasswordConfirm] = useState("");
   const [showUserPassword, setShowUserPassword] = useState(false);
-  const [userModulePermissions, setUserModulePermissions] = useState<ModulePermission[]>(() => defaultModulePermissions("surveyor"));
+  const [userModulePermissions, setUserModulePermissions] = useState<
+    ModulePermission[]
+  >(() => defaultModulePermissions("surveyor"));
   const [userProjects, setUserProjects] = useState<string[]>([]);
   const [editingUserId, setEditingUserId] = useState("");
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [passwordTarget, setPasswordTarget] = useState<User | null>(null);
   const [replacementPassword, setReplacementPassword] = useState("");
-  const [replacementPasswordConfirm, setReplacementPasswordConfirm] = useState("");
+  const [replacementPasswordConfirm, setReplacementPasswordConfirm] =
+    useState("");
   const [fieldDraft, setFieldDraft] = useState(blankField);
   const [auditFilter, setAuditFilter] = useState<"assets" | "all">("assets");
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [auditLoadAttempt, setAuditLoadAttempt] = useState(0);
+  const [auditLoading, setAuditLoading] = useState(true);
+  const [auditError, setAuditError] = useState("");
   const [dialog, setDialog] = useState<AdminDialog | null>(null);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
-  const [categoryDeleteTarget, setCategoryDeleteTarget] = useState<AssetCategory | null>(null);
-  const [categoryDraft, setCategoryDraft] = useState({ id: "", code: "", labelAr: "", labelEn: "", color: "#087F75", defaultUsefulLifeYears: "", defaultEstimatedPrice: "", currency: "AED", technicalFields: "" });
+  const [categoryDeleteTarget, setCategoryDeleteTarget] =
+    useState<AssetCategory | null>(null);
+  const [categoryDraft, setCategoryDraft] = useState({
+    id: "",
+    code: "",
+    labelAr: "",
+    labelEn: "",
+    color: "#087F75",
+    defaultUsefulLifeYears: "",
+    defaultEstimatedPrice: "",
+    currency: "AED",
+    technicalFields: "",
+  });
 
-  useEffect(() => { void (async () => {
-    try {
-      const payload = await apiGet<Config>("/api/config", { ttlMs: 60_000 });
-      setConfig(payload);
-      setProjectCategoryIds(payload.categories.filter(category => category.active).map(category => category.id));
-    } catch (err) {
-      if (err instanceof ApiClientError && err.status === 401) { window.location.replace("/login"); return; }
-      setError(err instanceof Error ? err.message : languageText(language, "تعذر تحميل بيانات لوحة الإدارة.", "Unable to load administration data."));
-    }
-  })(); }, [language]);
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        setError("");
+        const payload = await apiGet<Config>("/api/config", {
+          ttlMs: 0,
+          force: true,
+        });
+        if (!active) return;
+        setConfig(payload);
+        setProjectCategoryIds(
+          payload.categories
+            .filter((category) => category.active)
+            .map((category) => category.id),
+        );
+      } catch (err) {
+        if (!active) return;
+        if (err instanceof ApiClientError && err.status === 401) {
+          window.location.replace("/login");
+          return;
+        }
+        const message = err instanceof Error ? err.message : "";
+        const timeout =
+          err instanceof ApiClientError && err.status === 504
+            ? true
+            : /gateway timeout|statement timeout|timed?\s*out|aborted/i.test(
+                message,
+              );
+        setError(
+          timeout
+            ? languageText(
+                language,
+                "استغرق تحميل بيانات الإدارة وقتًا أطول من المتوقع. أعد المحاولة؛ لن يمنع سجل العمليات تحميل بقية الصفحة.",
+                "Administration data took longer than expected. Retry; the activity log will not block the rest of the page.",
+              )
+            : message
+              ? message
+            : languageText(
+                language,
+                "تعذر تحميل بيانات لوحة الإدارة.",
+                "Unable to load administration data.",
+              ),
+        );
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [language, loadAttempt]);
+
+  const adminUserId =
+    config?.currentUser.role === "admin" ? config.currentUser.id : "";
+
+  useEffect(() => {
+    if (!adminUserId) return;
+    let active = true;
+    void apiGet<{ auditLogs: AuditLog[] }>("/api/admin/audit", {
+      ttlMs: 0,
+      force: true,
+    })
+      .then((payload) => {
+        if (!active) return;
+        setConfig((current) =>
+          current ? { ...current, auditLogs: payload.auditLogs } : current,
+        );
+      })
+      .catch((err) => {
+        if (!active) return;
+        if (err instanceof ApiClientError && err.status === 401) {
+          window.location.replace("/login");
+          return;
+        }
+        setAuditError(
+          languageText(
+            language,
+            "تعذر تحميل سجل العمليات الآن. بقية إعدادات الإدارة متاحة ويمكن إعادة محاولة السجل وحده.",
+            "The activity log is unavailable right now. The rest of administration remains available and the log can be retried separately.",
+          ),
+        );
+      })
+      .finally(() => {
+        if (active) setAuditLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [adminUserId, language, auditLoadAttempt]);
+  useEffect(
+    () => () => {
+      if (projectLogoPreview) URL.revokeObjectURL(projectLogoPreview);
+    },
+    [projectLogoPreview],
+  );
   useEffect(() => {
     if (!dialog) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) setDialog(null); };
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) setDialog(null);
+    };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, [dialog, busy]);
 
   async function post(payload: Record<string, unknown>) {
-    setBusy(true); setError(""); setNotice("");
+    setBusy(true);
+    setError("");
+    setNotice("");
     try {
       const token = await getAccessToken();
-      if (!token) { window.location.replace("/login"); return false; }
-      const response = await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) });
-      const result = await readApiPayload<Config & { error?: string }>(response, language);
-      if (response.status === 401) { window.location.replace("/login"); return false; }
-      if (!response.ok) throw new Error(result.error || l("تعذر حفظ التغيير.", "Unable to save changes."));
+      if (!token) {
+        window.location.replace("/login");
+        return false;
+      }
+      const response = await fetch("/api/config", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const result = await readApiPayload<Config & { error?: string }>(
+        response,
+        language,
+      );
+      if (response.status === 401) {
+        window.location.replace("/login");
+        return false;
+      }
+      if (!response.ok)
+        throw new Error(
+          result.error || l("تعذر حفظ التغيير.", "Unable to save changes."),
+        );
       invalidateApiCache();
       const action = String(payload.action);
-      setConfig(result); setNotice(language === "ar" ? (successMessages[action] || "تم حفظ التغيير بنجاح.") : (successMessagesEn[action] || "Changes saved."));
+      setConfig((current) => ({
+        ...result,
+        auditLogs: current?.auditLogs || result.auditLogs,
+      }));
+      setNotice(
+        language === "ar"
+          ? successMessages[action] || "تم حفظ التغيير بنجاح."
+          : successMessagesEn[action] || "Changes saved.",
+      );
       return true;
-    } catch (err) { setError(err instanceof Error ? err.message : l("تعذر حفظ التغيير.", "Unable to save changes.")); return false; }
-    finally { setBusy(false); }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      const timeout =
+        err instanceof ApiClientError && err.status === 504
+          ? true
+          : /gateway timeout|statement timeout|timed?\s*out|aborted/i.test(
+              message,
+            );
+      setError(
+        timeout
+          ? l(
+              "استغرقت قاعدة البيانات وقتًا أطول من المتوقع. تحقق من ظهور التغيير قبل إعادة المحاولة لتجنب التكرار.",
+              "The database took longer than expected. Check whether the change appears before retrying to avoid duplicates.",
+            )
+          : message
+            ? message
+          : l("تعذر حفظ التغيير.", "Unable to save changes."),
+      );
+      return false;
+    } finally {
+      setBusy(false);
+    }
   }
 
-  const project = config?.projects.find(item => item.id === projectId);
-  const building = project?.buildings.find(item => item.id === buildingId);
-  const filteredAuditLogs = config?.auditLogs.filter(log => auditFilter === "all" || log.entity_type === "assets") || [];
-  const totals = useMemo(() => ({ projects: config?.projects.length || 0, buildings: config?.projects.reduce((sum, item) => sum + item.buildings.length, 0) || 0, users: config?.users.length || 0 }), [config]);
+  const project = config?.projects.find((item) => item.id === projectId);
+  const building = project?.buildings.find((item) => item.id === buildingId);
+  const filteredAuditLogs =
+    config?.auditLogs.filter(
+      (log) => auditFilter === "all" || log.entity_type === "assets",
+    ) || [];
+  const totals = useMemo(
+    () => ({
+      projects: config?.projects.length || 0,
+      buildings:
+        config?.projects.reduce(
+          (sum, item) => sum + item.buildings.length,
+          0,
+        ) || 0,
+      users: config?.users.length || 0,
+    }),
+    [config],
+  );
 
   function selectProject(id: string) {
-    setProjectId(id); setBuildingId(""); setFloorId(""); setOfficeZoneId(""); setLocationLevelId(""); setFieldDraft(blankField);
-    const selected = config?.projects.find(item => item.id === id);
+    setProjectId(id);
+    setBuildingId("");
+    setFloorId("");
+    setOfficeZoneId("");
+    setLocationLevelId("");
+    setFieldDraft(blankField);
+    setProjectLogoFile(null);
+    if (projectLogoPreview) URL.revokeObjectURL(projectLogoPreview);
+    setProjectLogoPreview("");
+    const selected = config?.projects.find((item) => item.id === id);
     setEditProjectName(selected?.name || "");
-    if (selected) setEditRequirements({ requireBuilding: selected.requireBuilding, requireFloor: selected.requireFloor, requireZone: selected.requireZone, requireOffice: selected.requireOffice, allowManual: selected.allowManual });
+    if (selected)
+      setEditRequirements({
+        requireBuilding: selected.requireBuilding,
+        requireFloor: selected.requireFloor,
+        requireZone: selected.requireZone,
+        requireOffice: selected.requireOffice,
+        allowManual: selected.allowManual,
+      });
+    if (selected?.clientLogoAvailable)
+      void (async () => {
+        const token = await getAccessToken();
+        if (!token) return;
+        const response = await fetch(
+          `/api/project-branding?project=${encodeURIComponent(selected.id)}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (response.ok)
+          setProjectLogoPreview(URL.createObjectURL(await response.blob()));
+      })();
   }
 
-  async function createProject(event: FormEvent) { event.preventDefault(); if (projectName.trim() && projectCategoryIds.length && await post({ action: "createProject", name: projectName, categoryIds: projectCategoryIds, ...requirements })) { setProjectName(""); setProjectCategoryIds([]); } }
-  async function updateProject(event: FormEvent) { event.preventDefault(); if (project && editProjectName.trim()) await post({ action: "updateProject", projectId: project.id, name: editProjectName, ...editRequirements }); }
+  function chooseProjectLogo(file: File | null) {
+    if (projectLogoPreview) URL.revokeObjectURL(projectLogoPreview);
+    setProjectLogoFile(file);
+    setProjectLogoPreview(file ? URL.createObjectURL(file) : "");
+  }
+
+  async function saveProjectLogo() {
+    if (!project || !projectLogoFile || logoBusy) return;
+    setLogoBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        window.location.replace("/login");
+        return;
+      }
+      const form = new FormData();
+      form.set("projectId", project.id);
+      form.set("logo", projectLogoFile);
+      const response = await fetch("/api/project-branding", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok)
+        throw new Error(
+          payload.error || l("تعذر حفظ الشعار.", "Unable to save the logo."),
+        );
+      setConfig((current) =>
+        current
+          ? {
+              ...current,
+              projects: current.projects.map((item) =>
+                item.id === project.id
+                  ? { ...item, clientLogoAvailable: true }
+                  : item,
+              ),
+            }
+          : current,
+      );
+      setProjectLogoFile(null);
+      setNotice(l("تم حفظ شعار العميل للمشروع.", "Project client logo saved."));
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : l("تعذر حفظ الشعار.", "Unable to save the logo."),
+      );
+    } finally {
+      setLogoBusy(false);
+    }
+  }
+
+  async function removeProjectLogo() {
+    if (!project || logoBusy) return;
+    setLogoBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        window.location.replace("/login");
+        return;
+      }
+      const response = await fetch(
+        `/api/project-branding?project=${encodeURIComponent(project.id)}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+      );
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok)
+        throw new Error(
+          payload.error || l("تعذر حذف الشعار.", "Unable to remove the logo."),
+        );
+      if (projectLogoPreview) URL.revokeObjectURL(projectLogoPreview);
+      setProjectLogoPreview("");
+      setProjectLogoFile(null);
+      setConfig((current) =>
+        current
+          ? {
+              ...current,
+              projects: current.projects.map((item) =>
+                item.id === project.id
+                  ? { ...item, clientLogoAvailable: false }
+                  : item,
+              ),
+            }
+          : current,
+      );
+      setNotice(
+        l("تم حذف شعار العميل من المشروع.", "Project client logo removed."),
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : l("تعذر حذف الشعار.", "Unable to remove the logo."),
+      );
+    } finally {
+      setLogoBusy(false);
+    }
+  }
+
+  async function createProject(event: FormEvent) {
+    event.preventDefault();
+    if (
+      projectName.trim() &&
+      projectCategoryIds.length &&
+      (await post({
+        action: "createProject",
+        name: projectName,
+        categoryIds: projectCategoryIds,
+        ...requirements,
+      }))
+    ) {
+      setProjectName("");
+      setProjectCategoryIds([]);
+    }
+  }
+  async function updateProject(event: FormEvent) {
+    event.preventDefault();
+    if (project && editProjectName.trim())
+      await post({
+        action: "updateProject",
+        projectId: project.id,
+        name: editProjectName,
+        ...editRequirements,
+      });
+  }
   async function archiveProject() {
     if (!project) return;
-    setDialog({ mode: "confirm", title: l(`أرشفة مشروع ${project.name}`, `Archive project ${project.name}`), description: l("سيتم إخفاء المشروع من القوائم مع الاحتفاظ بجميع الأصول وسجل التدقيق.", "The project will be hidden while all assets and audit history are retained."), action: "archiveProject", id: project.id, value: project.name });
+    setDialog({
+      mode: "confirm",
+      title: l(
+        `أرشفة مشروع ${project.name}`,
+        `Archive project ${project.name}`,
+      ),
+      description: l(
+        "سيتم إخفاء المشروع من القوائم مع الاحتفاظ بجميع الأصول وسجل التدقيق.",
+        "The project will be hidden while all assets and audit history are retained.",
+      ),
+      action: "archiveProject",
+      id: project.id,
+      value: project.name,
+    });
   }
-  async function addBuilding(event: FormEvent) { event.preventDefault(); if (await post({ action: "addBuilding", projectId, name: buildingName })) setBuildingName(""); }
-  async function addFloor(event: FormEvent) { event.preventDefault(); if (await post({ action: "addFloor", buildingId, name: floorName, sortOrder: (building?.floors.length || 0) + 1 })) setFloorName(""); }
-  async function addZone(event: FormEvent) { event.preventDefault(); if (await post({ action: "addZone", buildingId, floorId, name: zoneName })) setZoneName(""); }
-  async function addOffice(event: FormEvent) { event.preventDefault(); if (await post({ action: "addOffice", buildingId, floorId, zoneId: officeZoneId, name: officeName })) setOfficeName(""); }
+  async function addBuilding(event: FormEvent) {
+    event.preventDefault();
+    if (await post({ action: "addBuilding", projectId, name: buildingName }))
+      setBuildingName("");
+  }
+  async function addFloor(event: FormEvent) {
+    event.preventDefault();
+    if (
+      await post({
+        action: "addFloor",
+        buildingId,
+        name: floorName,
+        sortOrder: (building?.floors.length || 0) + 1,
+      })
+    )
+      setFloorName("");
+  }
+  async function addZone(event: FormEvent) {
+    event.preventDefault();
+    if (await post({ action: "addZone", buildingId, floorId, name: zoneName }))
+      setZoneName("");
+  }
+  async function addOffice(event: FormEvent) {
+    event.preventDefault();
+    if (
+      await post({
+        action: "addOffice",
+        buildingId,
+        floorId,
+        zoneId: officeZoneId,
+        name: officeName,
+      })
+    )
+      setOfficeName("");
+  }
   async function addLocationLevel(event: FormEvent) {
     event.preventDefault();
-    if (await post({ action: "addLocationLevel", projectId, parentLevelId: locationLevelParentId, key: locationLevelKey, labelAr: locationLevelLabelAr, labelEn: locationLevelLabelEn, required: locationLevelRequired, sortOrder: (project?.locationLevels.length || 0) * 10 + 10 })) {
-      setLocationLevelLabelAr(""); setLocationLevelLabelEn(""); setLocationLevelKey(""); setLocationLevelRequired(false); setLocationLevelParentId("");
+    if (
+      await post({
+        action: "addLocationLevel",
+        projectId,
+        parentLevelId: locationLevelParentId,
+        key: locationLevelKey,
+        labelAr: locationLevelLabelAr,
+        labelEn: locationLevelLabelEn,
+        required: locationLevelRequired,
+        sortOrder: (project?.locationLevels.length || 0) * 10 + 10,
+      })
+    ) {
+      setLocationLevelLabelAr("");
+      setLocationLevelLabelEn("");
+      setLocationLevelKey("");
+      setLocationLevelRequired(false);
+      setLocationLevelParentId("");
     }
   }
   async function addLocationOption(event: FormEvent) {
     event.preventDefault();
-    if (await post({ action: "addLocationOption", levelId: locationLevelId, buildingId, floorId, zoneId: officeZoneId, officeId: locationOfficeId, parentOptionId: locationParentOptionId, name: locationOptionName })) setLocationOptionName("");
+    if (
+      await post({
+        action: "addLocationOption",
+        levelId: locationLevelId,
+        buildingId,
+        floorId,
+        zoneId: officeZoneId,
+        officeId: locationOfficeId,
+        parentOptionId: locationParentOptionId,
+        name: locationOptionName,
+      })
+    )
+      setLocationOptionName("");
   }
   async function saveUser(event: FormEvent) {
     event.preventDefault();
     const action = editingUserId ? "upsertUser" : "createUser";
-    if (!userEmail.trim() || !userEmail.includes("@")) { setError(l("أدخل بريدًا إلكترونيًا صالحًا.", "Enter a valid email address.")); return; }
-    if (!userName.trim()) { setError(l("أدخل اسم المستخدم.", "Enter the user's name.")); return; }
-    if (!editingUserId && !isStrongPassword(userPassword)) { setError(l("استخدم 10 أحرف على الأقل تشمل حرفًا كبيرًا وصغيرًا ورقمًا ورمزًا.", "Use at least 10 characters including uppercase, lowercase, a number and a symbol.")); return; }
-    if (!editingUserId && userPassword !== userPasswordConfirm) { setError(l("كلمتا المرور غير متطابقتين.", "Passwords do not match.")); return; }
-    if (await post({ action, userId: editingUserId || undefined, email: userEmail, name: userName, role: userRole, password: editingUserId ? undefined : userPassword, projectIds: userProjects, modulePermissions: userModulePermissions })) { resetUserForm(); setUserDialogOpen(false); }
+    if (!userEmail.trim() || !userEmail.includes("@")) {
+      setError(
+        l("أدخل بريدًا إلكترونيًا صالحًا.", "Enter a valid email address."),
+      );
+      return;
+    }
+    if (!userName.trim()) {
+      setError(l("أدخل اسم المستخدم.", "Enter the user's name."));
+      return;
+    }
+    if (!editingUserId && !isStrongPassword(userPassword)) {
+      setError(
+        l(
+          "استخدم 10 أحرف على الأقل تشمل حرفًا كبيرًا وصغيرًا ورقمًا ورمزًا.",
+          "Use at least 10 characters including uppercase, lowercase, a number and a symbol.",
+        ),
+      );
+      return;
+    }
+    if (!editingUserId && userPassword !== userPasswordConfirm) {
+      setError(l("كلمتا المرور غير متطابقتين.", "Passwords do not match."));
+      return;
+    }
+    if (
+      await post({
+        action,
+        userId: editingUserId || undefined,
+        email: userEmail,
+        name: userName,
+        role: userRole,
+        password: editingUserId ? undefined : userPassword,
+        projectIds: userProjects,
+        modulePermissions: userModulePermissions,
+      })
+    ) {
+      resetUserForm();
+      setUserDialogOpen(false);
+    }
   }
-  function resetUserForm() { setEditingUserId(""); setUserEmail(""); setUserName(""); setUserRole("surveyor"); setUserPassword(""); setUserPasswordConfirm(""); setShowUserPassword(false); setUserModulePermissions(defaultModulePermissions("surveyor")); setUserProjects([]); }
-  function openNewUser() { resetUserForm(); setError(""); setUserDialogOpen(true); }
-  function editUser(user: User) { setEditingUserId(user.id); setUserEmail(user.email); setUserName(user.name); setUserRole(user.role); setUserPassword(""); setUserPasswordConfirm(""); setUserModulePermissions(user.modulePermissions?.length ? user.modulePermissions : defaultModulePermissions(user.role)); setUserProjects(user.projectIds); setError(""); setUserDialogOpen(true); }
-  function setModulePermission(index: number, action: ModuleAction, checked: boolean) {
-    setUserModulePermissions(current => current.map((permission, itemIndex) => {
-      if (itemIndex !== index) return permission;
-      if (action === "view" && !checked) return { ...permission, view: false, create: false, edit: false, delete: false, approve: false, export: false };
-      return { ...permission, view: action === "view" ? checked : checked || permission.view, [action]: checked };
-    }));
+  function resetUserForm() {
+    setEditingUserId("");
+    setUserEmail("");
+    setUserName("");
+    setUserRole("surveyor");
+    setUserPassword("");
+    setUserPasswordConfirm("");
+    setShowUserPassword(false);
+    setUserModulePermissions(defaultModulePermissions("surveyor"));
+    setUserProjects([]);
+  }
+  function openNewUser() {
+    resetUserForm();
+    setError("");
+    setUserDialogOpen(true);
+  }
+  function editUser(user: User) {
+    setEditingUserId(user.id);
+    setUserEmail(user.email);
+    setUserName(user.name);
+    setUserRole(user.role);
+    setUserPassword("");
+    setUserPasswordConfirm("");
+    setUserModulePermissions(
+      user.modulePermissions?.length
+        ? user.modulePermissions
+        : defaultModulePermissions(user.role),
+    );
+    setUserProjects(user.projectIds);
+    setError("");
+    setUserDialogOpen(true);
+  }
+  function setModulePermission(
+    index: number,
+    action: ModuleAction,
+    checked: boolean,
+  ) {
+    setUserModulePermissions((current) =>
+      current.map((permission, itemIndex) => {
+        if (itemIndex !== index) return permission;
+        if (action === "view" && !checked)
+          return {
+            ...permission,
+            view: false,
+            create: false,
+            edit: false,
+            delete: false,
+            approve: false,
+            export: false,
+          };
+        return {
+          ...permission,
+          view: action === "view" ? checked : checked || permission.view,
+          [action]: checked,
+        };
+      }),
+    );
   }
   async function saveReplacementPassword(event: FormEvent) {
     event.preventDefault();
     if (!passwordTarget) return;
-    if (replacementPassword !== replacementPasswordConfirm) { setError(l("كلمتا المرور غير متطابقتين.", "Passwords do not match.")); return; }
-    if (!isStrongPassword(replacementPassword)) { setError(l("استخدم 10 أحرف على الأقل تشمل حرفًا كبيرًا وصغيرًا ورقمًا ورمزًا.", "Use at least 10 characters including uppercase, lowercase, a number and a symbol.")); return; }
-    if (await post({ action: "resetUserPassword", userId: passwordTarget.id, password: replacementPassword })) {
-      setPasswordTarget(null); setReplacementPassword(""); setReplacementPasswordConfirm("");
+    if (replacementPassword !== replacementPasswordConfirm) {
+      setError(l("كلمتا المرور غير متطابقتين.", "Passwords do not match."));
+      return;
+    }
+    if (!isStrongPassword(replacementPassword)) {
+      setError(
+        l(
+          "استخدم 10 أحرف على الأقل تشمل حرفًا كبيرًا وصغيرًا ورقمًا ورمزًا.",
+          "Use at least 10 characters including uppercase, lowercase, a number and a symbol.",
+        ),
+      );
+      return;
+    }
+    if (
+      await post({
+        action: "resetUserPassword",
+        userId: passwordTarget.id,
+        password: replacementPassword,
+      })
+    ) {
+      setPasswordTarget(null);
+      setReplacementPassword("");
+      setReplacementPasswordConfirm("");
     }
   }
   async function saveCategory(event: FormEvent) {
     event.preventDefault();
-    const technicalFields = categoryDraft.technicalFields.split(/[\n,]/).map(item => item.trim()).filter(Boolean);
-    if (await post({ action: "saveAssetCategory", ...categoryDraft, defaultUsefulLifeYears: categoryDraft.defaultUsefulLifeYears || null, defaultEstimatedPrice: categoryDraft.defaultEstimatedPrice || null, technicalFields })) {
-      setCategoryDraft({ id: "", code: "", labelAr: "", labelEn: "", color: "#087F75", defaultUsefulLifeYears: "", defaultEstimatedPrice: "", currency: "AED", technicalFields: "" });
+    const technicalFields = categoryDraft.technicalFields
+      .split(/[\n,]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (
+      await post({
+        action: "saveAssetCategory",
+        ...categoryDraft,
+        defaultUsefulLifeYears: categoryDraft.defaultUsefulLifeYears || null,
+        defaultEstimatedPrice: categoryDraft.defaultEstimatedPrice || null,
+        technicalFields,
+      })
+    ) {
+      setCategoryDraft({
+        id: "",
+        code: "",
+        labelAr: "",
+        labelEn: "",
+        color: "#087F75",
+        defaultUsefulLifeYears: "",
+        defaultEstimatedPrice: "",
+        currency: "AED",
+        technicalFields: "",
+      });
       setCategoryDialogOpen(false);
     }
   }
   function editCategory(category: AssetCategory) {
-    setCategoryDraft({ id: category.id, code: category.code, labelAr: category.labelAr, labelEn: category.labelEn, color: category.color, defaultUsefulLifeYears: category.defaultUsefulLifeYears === null ? "" : String(category.defaultUsefulLifeYears), defaultEstimatedPrice: category.defaultEstimatedPrice === null ? "" : String(category.defaultEstimatedPrice), currency: category.currency, technicalFields: category.technicalFields.join(", ") });
+    setCategoryDraft({
+      id: category.id,
+      code: category.code,
+      labelAr: category.labelAr,
+      labelEn: category.labelEn,
+      color: category.color,
+      defaultUsefulLifeYears:
+        category.defaultUsefulLifeYears === null
+          ? ""
+          : String(category.defaultUsefulLifeYears),
+      defaultEstimatedPrice:
+        category.defaultEstimatedPrice === null
+          ? ""
+          : String(category.defaultEstimatedPrice),
+      currency: category.currency,
+      technicalFields: category.technicalFields.join(", "),
+    });
     setCategoryDialogOpen(true);
   }
-  async function renameLocation(action: "updateBuilding" | "updateFloor" | "updateZone" | "updateOffice", id: string, currentName: string, extra: Record<string, unknown> = {}) {
-    setDialog({ mode: "rename", title: l("تعديل اسم الموقع", "Rename location"), description: l("اكتب الاسم الجديد ثم احفظ التغيير.", "Enter the new name, then save."), action, id, value: currentName, extra });
+  async function renameLocation(
+    action: "updateBuilding" | "updateFloor" | "updateZone" | "updateOffice",
+    id: string,
+    currentName: string,
+    extra: Record<string, unknown> = {},
+  ) {
+    setDialog({
+      mode: "rename",
+      title: l("تعديل اسم الموقع", "Rename location"),
+      description: l(
+        "اكتب الاسم الجديد ثم احفظ التغيير.",
+        "Enter the new name, then save.",
+      ),
+      action,
+      id,
+      value: currentName,
+      extra,
+    });
   }
-  async function removeLocation(action: "archiveBuilding" | "deleteFloor" | "deleteZone" | "deleteOffice" | "deleteLocationLevel" | "deleteLocationOption", id: string, name: string) {
-    const description = action === "archiveBuilding" ? l("سيتم إخفاء المبنى مع الحفاظ على بيانات الأصول السابقة.", "The building will be hidden while historical asset data is preserved.") : l("سيتم حذف العنصر من الهيكل، بينما تبقى أسماء المواقع محفوظة داخل الأصول السابقة.", "The hierarchy item will be removed while historical asset location names remain stored.");
-    setDialog({ mode: "confirm", title: `${action === "archiveBuilding" ? l("أرشفة", "Archive") : l("حذف", "Delete")}: ${name}`, description, action, id, value: name });
+  async function removeLocation(
+    action:
+      | "archiveBuilding"
+      | "deleteFloor"
+      | "deleteZone"
+      | "deleteOffice"
+      | "deleteLocationLevel"
+      | "deleteLocationOption",
+    id: string,
+    name: string,
+  ) {
+    const description =
+      action === "archiveBuilding"
+        ? l(
+            "سيتم إخفاء المبنى مع الحفاظ على بيانات الأصول السابقة.",
+            "The building will be hidden while historical asset data is preserved.",
+          )
+        : l(
+            "سيتم حذف العنصر من الهيكل، بينما تبقى أسماء المواقع محفوظة داخل الأصول السابقة.",
+            "The hierarchy item will be removed while historical asset location names remain stored.",
+          );
+    setDialog({
+      mode: "confirm",
+      title: `${action === "archiveBuilding" ? l("أرشفة", "Archive") : l("حذف", "Delete")}: ${name}`,
+      description,
+      action,
+      id,
+      value: name,
+    });
   }
   async function submitDialog() {
     if (!dialog) return;
     if (dialog.mode === "rename") {
       const name = dialog.value.trim();
       if (!name) return;
-      if (await post({ action: dialog.action, id: dialog.id, name, ...(dialog.extra || {}) })) setDialog(null);
+      if (
+        await post({
+          action: dialog.action,
+          id: dialog.id,
+          name,
+          ...(dialog.extra || {}),
+        })
+      )
+        setDialog(null);
       return;
     }
-    const succeeded = dialog.action === "archiveProject"
-      ? await post({ action: dialog.action, projectId: dialog.id })
-      : await post({ action: dialog.action, id: dialog.id });
+    const succeeded =
+      dialog.action === "archiveProject"
+        ? await post({ action: dialog.action, projectId: dialog.id })
+        : await post({ action: dialog.action, id: dialog.id });
     if (succeeded) {
-      if (dialog.action === "archiveProject") { setProjectId(""); setBuildingId(""); }
+      if (dialog.action === "archiveProject") {
+        setProjectId("");
+        setBuildingId("");
+      }
       setDialog(null);
     }
   }
   function auditAction(log: AuditLog) {
     const action = log.action.toLowerCase();
-    const operation = action.endsWith("_insert") ? l("أضاف", "Created") : action.endsWith("_update") ? l("عدّل", "Updated") : action.endsWith("_delete") ? l("حذف", "Deleted") : action.replaceAll("_", " ");
-    const entity = log.entity_type === "assets" ? l("الأصل", "asset") : log.entity_type === "projects" ? l("المشروع", "project") : log.entity_type === "buildings" ? l("المبنى", "building") : log.entity_type === "floors" ? l("الطابق", "floor") : log.entity_type === "zones" ? l("الزون", "zone") : log.entity_type === "offices" ? l("المكتب", "office") : log.entity_type === "location_levels" ? l("المستوى المكاني", "location level") : log.entity_type === "location_options" ? l("قيمة الموقع", "location value") : log.entity_type === "app_users" ? l("المستخدم", "user") : l("السجل", "record");
+    const operation = action.endsWith("_insert")
+      ? l("أضاف", "Created")
+      : action.endsWith("_update")
+        ? l("عدّل", "Updated")
+        : action.endsWith("_delete")
+          ? l("حذف", "Deleted")
+          : action.replaceAll("_", " ");
+    const entity =
+      log.entity_type === "assets"
+        ? l("الأصل", "asset")
+        : log.entity_type === "projects"
+          ? l("المشروع", "project")
+          : log.entity_type === "buildings"
+            ? l("المبنى", "building")
+            : log.entity_type === "floors"
+              ? l("الطابق", "floor")
+              : log.entity_type === "zones"
+                ? l("الزون", "zone")
+                : log.entity_type === "offices"
+                  ? l("المكتب", "office")
+                  : log.entity_type === "location_levels"
+                    ? l("المستوى المكاني", "location level")
+                    : log.entity_type === "location_options"
+                      ? l("قيمة الموقع", "location value")
+                      : log.entity_type === "app_users"
+                        ? l("المستخدم", "user")
+                        : l("السجل", "record");
     return `${operation} ${entity}`;
   }
   async function saveCustomField(event: FormEvent) {
     event.preventDefault();
     if (!project?.draftConfig) return;
-    const options = fieldDraft.optionsText.split("\n").map((line, index) => {
-      const [code, labelAr, labelEn] = line.split("|").map(part => part.trim());
-      return { code: code || `option_${index + 1}`, labelAr: labelAr || code, labelEn: labelEn || labelAr || code };
-    }).filter(option => option.code && option.labelAr);
-    const assetTypes = fieldDraft.assetTypesText.split(/[\n,]/).map(item => item.trim()).filter(Boolean);
-    if (await post({ action: "saveCustomField", configId: project.draftConfig.id, fieldId: fieldDraft.id, key: fieldDraft.key, labelAr: fieldDraft.labelAr, labelEn: fieldDraft.labelEn, type: fieldDraft.type, required: fieldDraft.required, enabled: fieldDraft.enabled, options, sortOrder: fieldDraft.sortOrder, helpAr: fieldDraft.helpAr, helpEn: fieldDraft.helpEn, assetTypes, unit: fieldDraft.unit, aiExtract: fieldDraft.aiExtract, showInReports: fieldDraft.showInReports, showInQr: fieldDraft.showInQr })) setFieldDraft(blankField);
+    const options = fieldDraft.optionsText
+      .split("\n")
+      .map((line, index) => {
+        const [code, labelAr, labelEn] = line
+          .split("|")
+          .map((part) => part.trim());
+        return {
+          code: code || `option_${index + 1}`,
+          labelAr: labelAr || code,
+          labelEn: labelEn || labelAr || code,
+        };
+      })
+      .filter((option) => option.code && option.labelAr);
+    const assetTypes = fieldDraft.assetTypesText
+      .split(/[\n,]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (
+      await post({
+        action: "saveCustomField",
+        configId: project.draftConfig.id,
+        fieldId: fieldDraft.id,
+        key: fieldDraft.key,
+        labelAr: fieldDraft.labelAr,
+        labelEn: fieldDraft.labelEn,
+        type: fieldDraft.type,
+        required: fieldDraft.required,
+        enabled: fieldDraft.enabled,
+        options,
+        sortOrder: fieldDraft.sortOrder,
+        helpAr: fieldDraft.helpAr,
+        helpEn: fieldDraft.helpEn,
+        assetTypes,
+        unit: fieldDraft.unit,
+        aiExtract: fieldDraft.aiExtract,
+        showInReports: fieldDraft.showInReports,
+        showInQr: fieldDraft.showInQr,
+      })
+    )
+      setFieldDraft(blankField);
   }
   function editCustomField(field: CustomField) {
-    setFieldDraft({ id: field.id, key: field.key, labelAr: field.labelAr, labelEn: field.labelEn, type: field.type, required: field.required, enabled: field.enabled, optionsText: field.options.map(option => `${option.code}|${option.labelAr}|${option.labelEn}`).join("\n"), sortOrder: field.sortOrder, helpAr: field.helpAr, helpEn: field.helpEn, assetTypesText: field.assetTypes.join(", "), unit: field.unit, aiExtract: field.aiExtract, showInReports: field.showInReports, showInQr: field.showInQr });
+    setFieldDraft({
+      id: field.id,
+      key: field.key,
+      labelAr: field.labelAr,
+      labelEn: field.labelEn,
+      type: field.type,
+      required: field.required,
+      enabled: field.enabled,
+      optionsText: field.options
+        .map((option) => `${option.code}|${option.labelAr}|${option.labelEn}`)
+        .join("\n"),
+      sortOrder: field.sortOrder,
+      helpAr: field.helpAr,
+      helpEn: field.helpEn,
+      assetTypesText: field.assetTypes.join(", "),
+      unit: field.unit,
+      aiExtract: field.aiExtract,
+      showInReports: field.showInReports,
+      showInQr: field.showInQr,
+    });
   }
 
-  if (!config && !error) return <main className="admin-shell" dir={language === "ar" ? "rtl" : "ltr"}><div className="admin-loading">{l("جاري تحميل لوحة الإدارة…", "Loading administration…")}</div></main>;
-  return <main className="admin-shell al-page" dir={language === "ar" ? "rtl" : "ltr"}>
-    <header className="al-page-head legacy-page-head"><div><span className="al-page-kicker">System administration</span><h2>{l("إدارة AssetLens AI", "AssetLens AI Administration")}</h2><p>{l("إعداد المشاريع والمواقع والحقول الإلزامية وصلاحيات فرق المسح الميداني.", "Configure projects, locations, required fields and field-team permissions.")}</p></div></header>
-    {error && <div className="admin-error" role="alert">{error}</div>}
-    {notice && <div className="admin-notice" role="status">✓ {notice}</div>}
-    {config && config.currentUser.role !== "admin" ? <section className="admin-denied"><h2>{l("هذه الصفحة للمدير فقط", "Administrators only")}</h2><p>{l("يمكنك استخدام شاشة المسح، لكن حسابك لا يملك صلاحية تعديل البيانات الأساسية.", "Your account may use its assigned modules but cannot edit system configuration.")}</p></section> : config && <>
-      <section className="admin-stats" aria-label={l("ملخص لوحة الإدارة", "Administration summary")}><div><strong>{totals.projects}</strong><span>{l("المشاريع", "Projects")}</span></div><div><strong>{totals.buildings}</strong><span>{l("المباني والمواقع", "Buildings & sites")}</span></div><div><strong>{totals.users}</strong><span>{l("المستخدمون", "Users")}</span></div></section>
-      <nav className="admin-section-tabs" aria-label={l("أقسام الإدارة", "Administration sections")}>
-        <a href="#projects">{l("المشاريع", "Projects")}</a>
-        <a href="#categories">{l("التصنيفات", "Categories")}</a>
-        <a href="#locations">{l("الهيكل المكاني", "Location hierarchy")}</a>
-        <a href="#users">{l("المستخدمون والصلاحيات", "Users & roles")}</a>
-        <a href="#rules">{l("حقول المسح", "Survey fields")}</a>
-        <a href="#logs">{l("سجل العمليات", "Audit log")}</a>
-      </nav>
-      <section className="admin-grid">
-        <article className="admin-card" id="projects"><div className="admin-card-head"><span>01</span><div><h2>{l("إضافة مشروع أو جهة", "Add project or organization")}</h2><p>{l("مثال: سلال، MOE أو MOI.", "For example: SILAL, MOE or MOI.")}</p></div></div><form onSubmit={createProject}>
-          <label>{l("اسم المشروع / الجهة", "Project / organization name")}<input value={projectName} onChange={event => setProjectName(event.target.value)} placeholder={l("مثال: سلال", "Example: SILAL")} required /></label>
-          <fieldset><legend>{l("الحقول المطلوبة أثناء المسح", "Required survey fields")}</legend><div className="requirements-list">{requirementOptions.map(option => <label className="check-row" key={option.key}><input type="checkbox" checked={requirements[option.key]} onChange={event => setRequirements(current => ({ ...current, [option.key]: event.target.checked }))} /><span><b>{language === "ar" ? option.labelAr : option.labelEn}</b><small>{language === "ar" ? option.hintAr : option.hintEn}</small></span></label>)}</div></fieldset>
-          <fieldset><legend>{l("تصنيفات الأصول المتاحة في المشروع", "Asset categories available in this project")}</legend><div className="asset-category-picker">{config.categories.filter(category => category.active).map(category => <label key={category.id} style={{ "--category-color": category.color } as CSSProperties}><input type="checkbox" checked={projectCategoryIds.includes(category.id)} onChange={event => setProjectCategoryIds(current => event.target.checked ? [...current, category.id] : current.filter(id => id !== category.id))} /><span>{category.icon}</span><b>{language === "ar" ? category.labelAr : category.labelEn}<small>{language === "ar" ? category.labelEn : category.labelAr}</small></b></label>)}</div></fieldset>
-          <button disabled={busy || !projectCategoryIds.length}>{busy ? l("جاري الحفظ…", "Saving…") : l("حفظ المشروع", "Save project")}</button>
-        </form><div className="project-edit-panel"><h3>{l("تعديل أو أرشفة مشروع", "Edit or archive project")}</h3><label>{l("اختر المشروع", "Choose project")}<select value={projectId} onChange={event => selectProject(event.target.value)}><option value="">{l("اختر المشروع", "Choose project")}</option>{config.projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{project && <form onSubmit={updateProject}><label>{l("اسم المشروع", "Project name")}<input value={editProjectName} onChange={event => setEditProjectName(event.target.value)} required /></label><fieldset><legend>{l("الحقول المطلوبة لهذا المشروع", "Required fields for this project")}</legend><div className="requirements-list">{requirementOptions.map(option => <label className="check-row" key={option.key}><input type="checkbox" checked={editRequirements[option.key]} onChange={event => setEditRequirements(current => ({ ...current, [option.key]: event.target.checked }))} /><span><b>{language === "ar" ? option.labelAr : option.labelEn}</b><small>{language === "ar" ? option.hintAr : option.hintEn}</small></span></label>)}</div></fieldset><fieldset><legend>{l("تصنيفات المشروع", "Project categories")}</legend><div className="asset-category-picker compact">{config.categories.filter(category => category.active).map(category => <label key={category.id} style={{ "--category-color": category.color } as CSSProperties}><input type="checkbox" checked={project.categoryIds.includes(category.id)} onChange={event => { const categoryIds = event.target.checked ? [...project.categoryIds, category.id] : project.categoryIds.filter(id => id !== category.id); if (categoryIds.length) void post({ action: "setProjectCategories", projectId: project.id, categoryIds }); }} /><span>{category.icon}</span><b>{language === "ar" ? category.labelAr : category.labelEn}</b></label>)}</div></fieldset><div className="danger-actions"><button disabled={busy}>{l("حفظ تعديلات المشروع", "Save project changes")}</button><button type="button" className="danger-admin" disabled={busy} onClick={() => void archiveProject()}>{l("حذف / أرشفة المشروع", "Archive project")}</button></div></form>}</div></article>
+  if (!config && !error)
+    return (
+      <main className="admin-shell" dir={language === "ar" ? "rtl" : "ltr"}>
+        <div className="admin-loading">
+          {l("جاري تحميل لوحة الإدارة…", "Loading administration…")}
+        </div>
+      </main>
+    );
+  return (
+    <main
+      className="admin-shell al-page"
+      dir={language === "ar" ? "rtl" : "ltr"}
+    >
+      <header className="al-page-head legacy-page-head">
+        <div>
+          <span className="al-page-kicker">System administration</span>
+          <h2>{l("إدارة AssetLens AI", "AssetLens AI Administration")}</h2>
+          <p>
+            {l(
+              "إعداد المشاريع والمواقع والحقول الإلزامية وصلاحيات فرق المسح الميداني.",
+              "Configure projects, locations, required fields and field-team permissions.",
+            )}
+          </p>
+        </div>
+      </header>
+      {error && (
+        <div
+          className="admin-error al-alert error"
+          role="alert"
+          data-scroll-alert
+        >
+          {error}
+          {!config && (
+            <button
+              type="button"
+              onClick={() => {
+                setError("");
+                setLoadAttempt((attempt) => attempt + 1);
+              }}
+            >
+              {l("إعادة المحاولة", "Retry")}
+            </button>
+          )}
+        </div>
+      )}
+      {notice && (
+        <div
+          className="admin-notice al-alert success"
+          role="status"
+          aria-live="polite"
+          data-scroll-alert
+        >
+          ✓ {notice}
+        </div>
+      )}
+      {config && config.currentUser.role !== "admin" ? (
+        <section className="admin-denied">
+          <h2>{l("هذه الصفحة للمدير فقط", "Administrators only")}</h2>
+          <p>
+            {l(
+              "يمكنك استخدام شاشة المسح، لكن حسابك لا يملك صلاحية تعديل البيانات الأساسية.",
+              "Your account may use its assigned modules but cannot edit system configuration.",
+            )}
+          </p>
+        </section>
+      ) : (
+        config && (
+          <>
+            <section
+              className="admin-stats"
+              aria-label={l("ملخص لوحة الإدارة", "Administration summary")}
+            >
+              <div>
+                <strong>{totals.projects}</strong>
+                <span>{l("المشاريع", "Projects")}</span>
+              </div>
+              <div>
+                <strong>{totals.buildings}</strong>
+                <span>{l("المباني والمواقع", "Buildings & sites")}</span>
+              </div>
+              <div>
+                <strong>{totals.users}</strong>
+                <span>{l("المستخدمون", "Users")}</span>
+              </div>
+            </section>
+            <nav
+              className="admin-section-tabs"
+              aria-label={l("أقسام الإدارة", "Administration sections")}
+            >
+              <a href="#projects">{l("المشاريع", "Projects")}</a>
+              <a href="#categories">{l("التصنيفات", "Categories")}</a>
+              <a href="#locations">
+                {l("الهيكل المكاني", "Location hierarchy")}
+              </a>
+              {config.currentUser.isSuperAdmin && (
+                <a href="#users">
+                  {l("المستخدمون والصلاحيات", "Users & roles")}
+                </a>
+              )}
+              <a href="#rules">{l("حقول المسح", "Survey fields")}</a>
+              <a href="#logs">{l("سجل العمليات", "Audit log")}</a>
+            </nav>
+            <section className="admin-grid">
+              <article className="admin-card" id="projects">
+                <div className="admin-card-head">
+                  <span>01</span>
+                  <div>
+                    <h2>
+                      {config.currentUser.isSuperAdmin
+                        ? l("إضافة مشروع أو جهة", "Add project or organization")
+                        : l(
+                            "إدارة المشاريع المعيّنة",
+                            "Manage assigned projects",
+                          )}
+                    </h2>
+                    <p>
+                      {l(
+                        "مثال: سلال، MOE أو MOI.",
+                        "For example: SILAL, MOE or MOI.",
+                      )}
+                    </p>
+                  </div>
+                </div>
+                {config.currentUser.isSuperAdmin && (
+                  <form onSubmit={createProject}>
+                    <label>
+                      {l("اسم المشروع / الجهة", "Project / organization name")}
+                      <input
+                        value={projectName}
+                        onChange={(event) => setProjectName(event.target.value)}
+                        placeholder={l("مثال: سلال", "Example: SILAL")}
+                        required
+                      />
+                    </label>
+                    <fieldset>
+                      <legend>
+                        {l(
+                          "الحقول المطلوبة أثناء المسح",
+                          "Required survey fields",
+                        )}
+                      </legend>
+                      <div className="requirements-list">
+                        {requirementOptions.map((option) => (
+                          <label className="check-row" key={option.key}>
+                            <input
+                              type="checkbox"
+                              checked={requirements[option.key]}
+                              onChange={(event) =>
+                                setRequirements((current) => ({
+                                  ...current,
+                                  [option.key]: event.target.checked,
+                                }))
+                              }
+                            />
+                            <span>
+                              <b>
+                                {language === "ar"
+                                  ? option.labelAr
+                                  : option.labelEn}
+                              </b>
+                              <small>
+                                {language === "ar"
+                                  ? option.hintAr
+                                  : option.hintEn}
+                              </small>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <fieldset>
+                      <legend>
+                        {l(
+                          "تصنيفات الأصول المتاحة في المشروع",
+                          "Asset categories available in this project",
+                        )}
+                      </legend>
+                      <div className="asset-category-picker">
+                        {config.categories
+                          .filter((category) => category.active)
+                          .map((category) => (
+                            <label
+                              key={category.id}
+                              style={
+                                {
+                                  "--category-color": category.color,
+                                } as CSSProperties
+                              }
+                            >
+                              <input
+                                type="checkbox"
+                                checked={projectCategoryIds.includes(
+                                  category.id,
+                                )}
+                                onChange={(event) =>
+                                  setProjectCategoryIds((current) =>
+                                    event.target.checked
+                                      ? [...current, category.id]
+                                      : current.filter(
+                                          (id) => id !== category.id,
+                                        ),
+                                  )
+                                }
+                              />
+                              <span>{category.icon}</span>
+                              <b>
+                                {language === "ar"
+                                  ? category.labelAr
+                                  : category.labelEn}
+                                <small>
+                                  {language === "ar"
+                                    ? category.labelEn
+                                    : category.labelAr}
+                                </small>
+                              </b>
+                            </label>
+                          ))}
+                      </div>
+                    </fieldset>
+                    <button disabled={busy || !projectCategoryIds.length}>
+                      {busy
+                        ? l("جاري الحفظ…", "Saving…")
+                        : l("حفظ المشروع", "Save project")}
+                    </button>
+                  </form>
+                )}
+                <div className="project-edit-panel">
+                  <h3>
+                    {config.currentUser.isSuperAdmin
+                      ? l("تعديل أو أرشفة مشروع", "Edit or archive project")
+                      : l("تعديل مشروع معيّن", "Edit assigned project")}
+                  </h3>
+                  <label>
+                    {l("اختر المشروع", "Choose project")}
+                    <select
+                      value={projectId}
+                      onChange={(event) => selectProject(event.target.value)}
+                    >
+                      <option value="">
+                        {l("اختر المشروع", "Choose project")}
+                      </option>
+                      {config.projects.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {project && (
+                    <form onSubmit={updateProject}>
+                      <label>
+                        {l("اسم المشروع", "Project name")}
+                        <input
+                          value={editProjectName}
+                          onChange={(event) =>
+                            setEditProjectName(event.target.value)
+                          }
+                          required
+                        />
+                      </label>
+                      <fieldset>
+                        <legend>
+                          {l(
+                            "الحقول المطلوبة لهذا المشروع",
+                            "Required fields for this project",
+                          )}
+                        </legend>
+                        <div className="requirements-list">
+                          {requirementOptions.map((option) => (
+                            <label className="check-row" key={option.key}>
+                              <input
+                                type="checkbox"
+                                checked={editRequirements[option.key]}
+                                onChange={(event) =>
+                                  setEditRequirements((current) => ({
+                                    ...current,
+                                    [option.key]: event.target.checked,
+                                  }))
+                                }
+                              />
+                              <span>
+                                <b>
+                                  {language === "ar"
+                                    ? option.labelAr
+                                    : option.labelEn}
+                                </b>
+                                <small>
+                                  {language === "ar"
+                                    ? option.hintAr
+                                    : option.hintEn}
+                                </small>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                      <fieldset>
+                        <legend>
+                          {l("تصنيفات المشروع", "Project categories")}
+                        </legend>
+                        <div className="asset-category-picker compact">
+                          {config.categories
+                            .filter((category) => category.active)
+                            .map((category) => (
+                              <label
+                                key={category.id}
+                                style={
+                                  {
+                                    "--category-color": category.color,
+                                  } as CSSProperties
+                                }
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={project.categoryIds.includes(
+                                    category.id,
+                                  )}
+                                  onChange={(event) => {
+                                    const categoryIds = event.target.checked
+                                      ? [...project.categoryIds, category.id]
+                                      : project.categoryIds.filter(
+                                          (id) => id !== category.id,
+                                        );
+                                    if (categoryIds.length)
+                                      void post({
+                                        action: "setProjectCategories",
+                                        projectId: project.id,
+                                        categoryIds,
+                                      });
+                                  }}
+                                />
+                                <span>{category.icon}</span>
+                                <b>
+                                  {language === "ar"
+                                    ? category.labelAr
+                                    : category.labelEn}
+                                </b>
+                              </label>
+                            ))}
+                        </div>
+                      </fieldset>
+                      <fieldset className="project-branding-fieldset">
+                        <legend>
+                          {l(
+                            "هوية العميل في التقارير",
+                            "Client identity in reports",
+                          )}
+                        </legend>
+                        <p>
+                          {l(
+                            "شعار اختياري يظهر بجانب شعار AssetLens في ترويسة التقرير. PNG أو JPG أو WEBP حتى 2 MB.",
+                            "Optional logo shown beside AssetLens in the report header. PNG, JPG or WEBP up to 2 MB.",
+                          )}
+                        </p>
+                        <div className="project-logo-editor">
+                          <div className="project-logo-preview">
+                            {projectLogoPreview ? (
+                              <Image
+                                src={projectLogoPreview}
+                                alt={l(
+                                  "معاينة شعار العميل",
+                                  "Client logo preview",
+                                )}
+                                width={145}
+                                height={58}
+                                unoptimized
+                              />
+                            ) : (
+                              <span>
+                                {l("لا يوجد شعار عميل", "No client logo")}
+                              </span>
+                            )}
+                          </div>
+                          <label className="project-logo-picker">
+                            <span>
+                              {project.clientLogoAvailable
+                                ? l("استبدال الصورة", "Replace image")
+                                : l("إرفاق صورة", "Attach image")}
+                            </span>
+                            <input
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp"
+                              onChange={(event) => {
+                                chooseProjectLogo(
+                                  event.target.files?.[0] || null,
+                                );
+                                event.target.value = "";
+                              }}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="al-secondary-button"
+                            disabled={!projectLogoFile || logoBusy}
+                            onClick={() => void saveProjectLogo()}
+                          >
+                            {logoBusy
+                              ? l("جاري الحفظ…", "Saving…")
+                              : l("حفظ الشعار", "Save logo")}
+                          </button>
+                          {(projectLogoFile || project.clientLogoAvailable) && (
+                            <button
+                              type="button"
+                              className="danger-admin"
+                              disabled={logoBusy}
+                              onClick={() =>
+                                projectLogoFile
+                                  ? chooseProjectLogo(null)
+                                  : void removeProjectLogo()
+                              }
+                            >
+                              {projectLogoFile
+                                ? l("إلغاء الاختيار", "Cancel selection")
+                                : l("حذف الشعار", "Remove logo")}
+                            </button>
+                          )}
+                        </div>
+                      </fieldset>
+                      <div className="danger-actions">
+                        <button disabled={busy}>
+                          {l("حفظ تعديلات المشروع", "Save project changes")}
+                        </button>
+                        {config.currentUser.isSuperAdmin && (
+                          <button
+                            type="button"
+                            className="danger-admin"
+                            disabled={busy}
+                            onClick={() => void archiveProject()}
+                          >
+                            {l("حذف / أرشفة المشروع", "Archive project")}
+                          </button>
+                        )}
+                      </div>
+                    </form>
+                  )}
+                </div>
+              </article>
 
-        <article className="admin-card category-admin-card" id="categories">
-          <div className="admin-card-head category-toolbar">
-            <span>CAT</span>
-            <div><h2>{l("تصنيفات الأصول", "Asset categories")}</h2><p>{l("إدارة التصنيفات والعمر والسعر الإرشادي والحقول الفنية. أهمية كل أصل تُقيّم مستقلاً.", "Manage categories, suggested life and price, and technical fields. Every asset is rated independently.")}</p></div>
-            {config.currentUser.isSuperAdmin && <button type="button" className="al-primary-button" onClick={() => { setCategoryDraft({ id: "", code: "", labelAr: "", labelEn: "", color: "#087F75", defaultUsefulLifeYears: "", defaultEstimatedPrice: "", currency: "AED", technicalFields: "" }); setCategoryDialogOpen(true); }}>＋ {l("تصنيف جديد", "New category")}</button>}
-          </div>
-          <div className="category-professional-list" role="list">
-            {config.categories.map(category => <article key={category.id} className={!category.active ? "inactive-category" : ""} role="listitem">
-              <span className="category-color" style={{ background: category.color }} aria-hidden="true" />
-              <div className="category-identity"><strong>{language === "ar" ? category.labelAr : category.labelEn}</strong><small>{language === "ar" ? category.labelEn : category.labelAr}</small></div>
-              <div><small>{l("العمر المقترح", "Suggested life")}</small><b>{category.defaultUsefulLifeYears ? `${category.defaultUsefulLifeYears} ${l("سنة", "years")}` : "—"}</b></div>
-              <div><small>{l("السعر المقترح", "Suggested price")}</small><b>{category.defaultEstimatedPrice ? `${category.defaultEstimatedPrice.toLocaleString()} ${category.currency}` : "—"}</b></div>
-              <div className="category-actions"><button type="button" onClick={() => editCategory(category)}>{l("تعديل", "Edit")}</button><button type="button" className={category.active ? "danger-mini" : "success-mini"} onClick={() => void post({ action: "setAssetCategoryActive", id: category.id, active: !category.active })}>{category.active ? l("تعطيل", "Disable") : l("تفعيل", "Enable")}</button><button type="button" className="danger-mini" onClick={() => setCategoryDeleteTarget(category)}>{l("حذف", "Delete")}</button></div>
-            </article>)}
-          </div>
-        </article>
+              <article
+                className="admin-card category-admin-card"
+                id="categories"
+              >
+                <div className="admin-card-head category-toolbar">
+                  <span>CAT</span>
+                  <div>
+                    <h2>{l("تصنيفات الأصول", "Asset categories")}</h2>
+                    <p>
+                      {l(
+                        "إدارة التصنيفات والعمر والسعر الإرشادي والحقول الفنية. أهمية كل أصل تُقيّم مستقلاً.",
+                        "Manage categories, suggested life and price, and technical fields. Every asset is rated independently.",
+                      )}
+                    </p>
+                  </div>
+                  {config.currentUser.isSuperAdmin && (
+                    <button
+                      type="button"
+                      className="al-primary-button"
+                      onClick={() => {
+                        setCategoryDraft({
+                          id: "",
+                          code: "",
+                          labelAr: "",
+                          labelEn: "",
+                          color: "#087F75",
+                          defaultUsefulLifeYears: "",
+                          defaultEstimatedPrice: "",
+                          currency: "AED",
+                          technicalFields: "",
+                        });
+                        setCategoryDialogOpen(true);
+                      }}
+                    >
+                      ＋ {l("تصنيف جديد", "New category")}
+                    </button>
+                  )}
+                </div>
+                <div className="category-professional-list" role="list">
+                  {config.categories.map((category) => (
+                    <article
+                      key={category.id}
+                      className={!category.active ? "inactive-category" : ""}
+                      role="listitem"
+                    >
+                      <span
+                        className="category-color"
+                        style={{ background: category.color }}
+                        aria-hidden="true"
+                      />
+                      <div className="category-identity">
+                        <strong>
+                          {language === "ar"
+                            ? category.labelAr
+                            : category.labelEn}
+                        </strong>
+                        <small>
+                          {language === "ar"
+                            ? category.labelEn
+                            : category.labelAr}
+                        </small>
+                      </div>
+                      <div>
+                        <small>{l("العمر المقترح", "Suggested life")}</small>
+                        <b>
+                          {category.defaultUsefulLifeYears
+                            ? `${category.defaultUsefulLifeYears} ${l("سنة", "years")}`
+                            : "—"}
+                        </b>
+                      </div>
+                      <div>
+                        <small>{l("السعر المقترح", "Suggested price")}</small>
+                        <b>
+                          {category.defaultEstimatedPrice
+                            ? `${category.defaultEstimatedPrice.toLocaleString()} ${category.currency}`
+                            : "—"}
+                        </b>
+                      </div>
+                      {config.currentUser.isSuperAdmin && (
+                        <div className="category-actions">
+                          <button
+                            type="button"
+                            onClick={() => editCategory(category)}
+                          >
+                            {l("تعديل", "Edit")}
+                          </button>
+                          <button
+                            type="button"
+                            className={
+                              category.active ? "danger-mini" : "success-mini"
+                            }
+                            onClick={() =>
+                              void post({
+                                action: "setAssetCategoryActive",
+                                id: category.id,
+                                active: !category.active,
+                              })
+                            }
+                          >
+                            {category.active
+                              ? l("تعطيل", "Disable")
+                              : l("تفعيل", "Enable")}
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-mini"
+                            onClick={() => setCategoryDeleteTarget(category)}
+                          >
+                            {l("حذف", "Delete")}
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              </article>
 
-        <article className="admin-card" id="locations"><div className="admin-card-head"><span>02</span><div><h2>{l("بناء هيكل المواقع الديناميكي", "Dynamic location hierarchy")}</h2><p>{l("أضف المباني والطوابق والزونات، ثم أنشئ أي مستويات إضافية حسب المشروع.", "Add buildings, floors and zones, then create any additional levels required by the project.")}</p></div></div>
-          <div className="admin-selects"><label>{l("المشروع", "Project")}<select value={projectId} onChange={event => selectProject(event.target.value)}><option value="">{l("اختر المشروع", "Choose project")}</option>{config.projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>{l("المبنى / الموقع", "Building / site")}<select value={buildingId} disabled={!projectId} onChange={event => { setBuildingId(event.target.value); setFloorId(""); setOfficeZoneId(""); }}><option value="">{l("اختر المبنى", "Choose building")}</option>{project?.buildings.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
-          <form className="inline-admin-form" onSubmit={addBuilding}><input aria-label={l("اسم المبنى الجديد", "New building name")} value={buildingName} onChange={event => setBuildingName(event.target.value)} placeholder={l("اسم المبنى / الموقع الجديد", "New building / site name")} required /><button disabled={busy || !projectId}>{l("إضافة مبنى", "Add building")}</button></form>
-          <form className="inline-admin-form" onSubmit={addFloor}><input aria-label={l("اسم الطابق الجديد", "New floor name")} value={floorName} onChange={event => setFloorName(event.target.value)} placeholder={l("اسم أو رقم الطابق الجديد", "New floor name or number")} required /><button disabled={busy || !buildingId}>{l("إضافة طابق", "Add floor")}</button></form>
-          <form className="zone-form" onSubmit={addZone}><select aria-label={l("الطابق الخاص بالزون", "Zone floor")} value={floorId} disabled={!buildingId} onChange={event => setFloorId(event.target.value)}><option value="">{l("كل المبنى / بدون طابق", "Whole building / no floor")}</option>{building?.floors.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><input aria-label={l("اسم الزون الجديد", "New zone name")} value={zoneName} onChange={event => setZoneName(event.target.value)} placeholder={l("اسم الزون الجديد", "New zone name")} required /><button disabled={busy || !buildingId}>{l("إضافة زون", "Add zone")}</button></form>
-          <form className="zone-form" onSubmit={addOffice}><select aria-label={l("الزون الخاص بالمكتب", "Office zone")} value={officeZoneId} disabled={!buildingId} onChange={event => setOfficeZoneId(event.target.value)}><option value="">{l("المبنى أو الطابق دون زون", "Building or floor without a zone")}</option>{building?.zones.filter(zone => !zone.floorId || !floorId || zone.floorId === floorId).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><input aria-label={l("اسم المكتب أو الغرفة", "Office or room name")} value={officeName} onChange={event => setOfficeName(event.target.value)} placeholder={l("اسم المكتب أو الغرفة", "Office or room name")} required /><button disabled={busy || !buildingId}>{l("إضافة مكتب / غرفة", "Add office / room")}</button></form>
-          <section className="dynamic-location-admin">
-            <h3>{l("المستويات الإضافية التي يحددها الأدمن", "Administrator-defined additional levels")}</h3>
-            <p>{l("مثال: مكتب، منطقة تغذية، غرفة، جناح أو قسم. كل مستوى يظهر تلقائيًا في الالتقاط والاستيراد والتقارير.", "Examples: office, feeding area, room, wing or section. Every level appears automatically in capture, import and reports.")}</p>
-            <form className="dynamic-level-form" onSubmit={addLocationLevel}>
-              <input aria-label={l("اسم المستوى بالعربي", "Arabic level name")} value={locationLevelLabelAr} onChange={event => setLocationLevelLabelAr(event.target.value)} placeholder={l("الاسم بالعربي: مكتب", "Arabic name")} required />
-              <input className="ltr-input" aria-label={l("رمز المستوى", "Level key")} value={locationLevelKey} onChange={event => setLocationLevelKey(event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_"))} placeholder="office" required />
-              <input aria-label={l("اسم المستوى بالإنجليزي", "English level name")} value={locationLevelLabelEn} onChange={event => { const next = event.target.value; setLocationLevelLabelEn(next); if (!locationLevelKey) setLocationLevelKey(next.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")); }} placeholder="Office" />
-              <select aria-label={l("المستوى السابق", "Preceding level")} value={locationLevelParentId} onChange={event => setLocationLevelParentId(event.target.value)}><option value="">{l("بعد الزون / المكتب مباشرة", "After zone / office")}</option>{project?.locationLevels.filter(level => level.key !== "office").map(level => <option key={level.id} value={level.id}>{language === "ar" ? level.labelAr : level.labelEn || level.key}</option>)}</select>
-              <label className="check-row"><input type="checkbox" checked={locationLevelRequired} onChange={event => setLocationLevelRequired(event.target.checked)} /><span><b>{l("إلزامي", "Required")}</b></span></label>
-              <button disabled={busy || !projectId}>{l("إضافة المستوى", "Add level")}</button>
-            </form>
-            {project?.locationLevels.length ? <>
-              <form className="dynamic-option-form" onSubmit={addLocationOption}>
-                <select aria-label={l("المستوى المكاني", "Location level")} value={locationLevelId} onChange={event => { setLocationLevelId(event.target.value); setLocationParentOptionId(""); }} required><option value="">{l("اختر المستوى", "Choose level")}</option>{project.locationLevels.map(level => <option key={level.id} value={level.id}>{language === "ar" ? level.labelAr : (level.labelEn || level.key)}</option>)}</select>
-                <select aria-label={l("الزون المرتبط بالقيمة", "Related zone")} value={officeZoneId} disabled={!buildingId} onChange={event => setOfficeZoneId(event.target.value)}><option value="">{l("كل المبنى / بدون زون", "Whole building / no zone")}</option>{building?.zones.filter(zone => !zone.floorId || !floorId || zone.floorId === floorId).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-                {!project.locationLevels.find(level => level.id === locationLevelId)?.parentLevelId && <select aria-label={l("المكتب المرتبط بالقيمة", "Related office")} value={locationOfficeId} disabled={!buildingId} onChange={event => setLocationOfficeId(event.target.value)}><option value="">{l("أي مكتب", "Any office")}</option>{building?.offices.filter(office => (!floorId || !office.floorId || office.floorId === floorId) && (!officeZoneId || !office.zoneId || office.zoneId === officeZoneId)).map(office => <option key={office.id} value={office.id}>{office.name}</option>)}</select>}
-                {project.locationLevels.find(level => level.id === locationLevelId)?.parentLevelId && <select aria-label={l("قيمة المستوى السابق", "Preceding level value")} value={locationParentOptionId} onChange={event => setLocationParentOptionId(event.target.value)} required><option value="">{l("اختر القيمة السابقة", "Choose preceding value")}</option>{project.locationLevels.find(level => level.id === project.locationLevels.find(item => item.id === locationLevelId)?.parentLevelId)?.options.filter(option => !option.buildingId || option.buildingId === buildingId).map(option => <option key={option.id} value={option.id}>{option.name}</option>)}</select>}
-                <input value={locationOptionName} onChange={event => setLocationOptionName(event.target.value)} placeholder={l("اسم القيمة: مكتب 204", "Value name: Office 204")} required />
-                <button disabled={busy || !locationLevelId}>{l("إضافة قيمة", "Add value")}</button>
-              </form>
-              <div className="dynamic-level-list">{project.locationLevels.map(level => <article key={level.id}><div><strong>{language === "ar" ? level.labelAr : (level.labelEn || level.key)}</strong><small>{level.parentLevelId ? `${l("بعد", "After")} ${project.locationLevels.find(item => item.id === level.parentLevelId)?.[language === "ar" ? "labelAr" : "labelEn"] || "—"} · ` : ""}{language === "ar" ? (level.labelEn || level.key) : level.key} · {level.required ? l("إلزامي", "Required") : l("اختياري", "Optional")}</small></div><button type="button" onClick={() => void post({ action: "updateLocationLevel", id: level.id, labelAr: level.labelAr, labelEn: level.labelEn, required: !level.required, sortOrder: level.sortOrder })}>{level.required ? l("اجعله اختياريًا", "Make optional") : l("اجعله إلزاميًا", "Make required")}</button><button type="button" className="danger-mini" onClick={() => void removeLocation("deleteLocationLevel", level.id, level.labelAr)}>{l("حذف المستوى", "Delete level")}</button><div>{level.options.filter(option => !buildingId || !option.buildingId || option.buildingId === buildingId).map(option => <span key={option.id}>{option.name}<button type="button" onClick={() => void removeLocation("deleteLocationOption", option.id, option.name)}>×</button></span>)}</div></article>)}</div>
-            </> : <small>{l("لا توجد مستويات إضافية لهذا المشروع حتى الآن.", "No additional levels have been added to this project yet.")}</small>}
+              <article className="admin-card" id="locations">
+                <div className="admin-card-head">
+                  <span>02</span>
+                  <div>
+                    <h2>
+                      {l(
+                        "بناء هيكل المواقع الديناميكي",
+                        "Dynamic location hierarchy",
+                      )}
+                    </h2>
+                    <p>
+                      {l(
+                        "أضف المباني والطوابق والزونات، ثم أنشئ أي مستويات إضافية حسب المشروع.",
+                        "Add buildings, floors and zones, then create any additional levels required by the project.",
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="admin-selects">
+                  <label>
+                    {l("المشروع", "Project")}
+                    <select
+                      value={projectId}
+                      onChange={(event) => selectProject(event.target.value)}
+                    >
+                      <option value="">
+                        {l("اختر المشروع", "Choose project")}
+                      </option>
+                      {config.projects.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    {l("المبنى / الموقع", "Building / site")}
+                    <select
+                      value={buildingId}
+                      disabled={!projectId}
+                      onChange={(event) => {
+                        setBuildingId(event.target.value);
+                        setFloorId("");
+                        setOfficeZoneId("");
+                      }}
+                    >
+                      <option value="">
+                        {l("اختر المبنى", "Choose building")}
+                      </option>
+                      {project?.buildings.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <form className="inline-admin-form" onSubmit={addBuilding}>
+                  <input
+                    aria-label={l("اسم المبنى الجديد", "New building name")}
+                    value={buildingName}
+                    onChange={(event) => setBuildingName(event.target.value)}
+                    placeholder={l(
+                      "اسم المبنى / الموقع الجديد",
+                      "New building / site name",
+                    )}
+                    required
+                  />
+                  <button disabled={busy || !projectId}>
+                    {l("إضافة مبنى", "Add building")}
+                  </button>
+                </form>
+                <form className="inline-admin-form" onSubmit={addFloor}>
+                  <input
+                    aria-label={l("اسم الطابق الجديد", "New floor name")}
+                    value={floorName}
+                    onChange={(event) => setFloorName(event.target.value)}
+                    placeholder={l(
+                      "اسم أو رقم الطابق الجديد",
+                      "New floor name or number",
+                    )}
+                    required
+                  />
+                  <button disabled={busy || !buildingId}>
+                    {l("إضافة طابق", "Add floor")}
+                  </button>
+                </form>
+                <form className="zone-form" onSubmit={addZone}>
+                  <select
+                    aria-label={l("الطابق الخاص بالزون", "Zone floor")}
+                    value={floorId}
+                    disabled={!buildingId}
+                    onChange={(event) => setFloorId(event.target.value)}
+                  >
+                    <option value="">
+                      {l("كل المبنى / بدون طابق", "Whole building / no floor")}
+                    </option>
+                    {building?.floors.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    aria-label={l("اسم الزون الجديد", "New zone name")}
+                    value={zoneName}
+                    onChange={(event) => setZoneName(event.target.value)}
+                    placeholder={l("اسم الزون الجديد", "New zone name")}
+                    required
+                  />
+                  <button disabled={busy || !buildingId}>
+                    {l("إضافة زون", "Add zone")}
+                  </button>
+                </form>
+                <form className="zone-form" onSubmit={addOffice}>
+                  <select
+                    aria-label={l("الزون الخاص بالمكتب", "Office zone")}
+                    value={officeZoneId}
+                    disabled={!buildingId}
+                    onChange={(event) => setOfficeZoneId(event.target.value)}
+                  >
+                    <option value="">
+                      {l(
+                        "المبنى أو الطابق دون زون",
+                        "Building or floor without a zone",
+                      )}
+                    </option>
+                    {building?.zones
+                      .filter(
+                        (zone) =>
+                          !zone.floorId || !floorId || zone.floorId === floorId,
+                      )
+                      .map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                  </select>
+                  <input
+                    aria-label={l(
+                      "اسم المكتب أو الغرفة",
+                      "Office or room name",
+                    )}
+                    value={officeName}
+                    onChange={(event) => setOfficeName(event.target.value)}
+                    placeholder={l(
+                      "اسم المكتب أو الغرفة",
+                      "Office or room name",
+                    )}
+                    required
+                  />
+                  <button disabled={busy || !buildingId}>
+                    {l("إضافة مكتب / غرفة", "Add office / room")}
+                  </button>
+                </form>
+                <section className="dynamic-location-admin">
+                  <h3>
+                    {l(
+                      "المستويات الإضافية التي يحددها الأدمن",
+                      "Administrator-defined additional levels",
+                    )}
+                  </h3>
+                  <p>
+                    {l(
+                      "مثال: مكتب، منطقة تغذية، غرفة، جناح أو قسم. كل مستوى يظهر تلقائيًا في الالتقاط والاستيراد والتقارير.",
+                      "Examples: office, feeding area, room, wing or section. Every level appears automatically in capture, import and reports.",
+                    )}
+                  </p>
+                  <form
+                    className="dynamic-level-form"
+                    onSubmit={addLocationLevel}
+                  >
+                    <input
+                      aria-label={l("اسم المستوى بالعربي", "Arabic level name")}
+                      value={locationLevelLabelAr}
+                      onChange={(event) =>
+                        setLocationLevelLabelAr(event.target.value)
+                      }
+                      placeholder={l("الاسم بالعربي: مكتب", "Arabic name")}
+                      required
+                    />
+                    <input
+                      className="ltr-input"
+                      aria-label={l("رمز المستوى", "Level key")}
+                      value={locationLevelKey}
+                      onChange={(event) =>
+                        setLocationLevelKey(
+                          event.target.value
+                            .toLowerCase()
+                            .replace(/[^a-z0-9_]/g, "_"),
+                        )
+                      }
+                      placeholder="office"
+                      required
+                    />
+                    <input
+                      aria-label={l(
+                        "اسم المستوى بالإنجليزي",
+                        "English level name",
+                      )}
+                      value={locationLevelLabelEn}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        setLocationLevelLabelEn(next);
+                        if (!locationLevelKey)
+                          setLocationLevelKey(
+                            next
+                              .trim()
+                              .toLowerCase()
+                              .replace(/[^a-z0-9]+/g, "_")
+                              .replace(/^_+|_+$/g, ""),
+                          );
+                      }}
+                      placeholder="Office"
+                    />
+                    <select
+                      aria-label={l("المستوى السابق", "Preceding level")}
+                      value={locationLevelParentId}
+                      onChange={(event) =>
+                        setLocationLevelParentId(event.target.value)
+                      }
+                    >
+                      <option value="">
+                        {l("بعد الزون / المكتب مباشرة", "After zone / office")}
+                      </option>
+                      {project?.locationLevels
+                        .filter((level) => level.key !== "office")
+                        .map((level) => (
+                          <option key={level.id} value={level.id}>
+                            {language === "ar"
+                              ? level.labelAr
+                              : level.labelEn || level.key}
+                          </option>
+                        ))}
+                    </select>
+                    <label className="check-row">
+                      <input
+                        type="checkbox"
+                        checked={locationLevelRequired}
+                        onChange={(event) =>
+                          setLocationLevelRequired(event.target.checked)
+                        }
+                      />
+                      <span>
+                        <b>{l("إلزامي", "Required")}</b>
+                      </span>
+                    </label>
+                    <button disabled={busy || !projectId}>
+                      {l("إضافة المستوى", "Add level")}
+                    </button>
+                  </form>
+                  {project?.locationLevels.length ? (
+                    <>
+                      <form
+                        className="dynamic-option-form"
+                        onSubmit={addLocationOption}
+                      >
+                        <select
+                          aria-label={l("المستوى المكاني", "Location level")}
+                          value={locationLevelId}
+                          onChange={(event) => {
+                            setLocationLevelId(event.target.value);
+                            setLocationParentOptionId("");
+                          }}
+                          required
+                        >
+                          <option value="">
+                            {l("اختر المستوى", "Choose level")}
+                          </option>
+                          {project.locationLevels.map((level) => (
+                            <option key={level.id} value={level.id}>
+                              {language === "ar"
+                                ? level.labelAr
+                                : level.labelEn || level.key}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          aria-label={l(
+                            "الزون المرتبط بالقيمة",
+                            "Related zone",
+                          )}
+                          value={officeZoneId}
+                          disabled={!buildingId}
+                          onChange={(event) =>
+                            setOfficeZoneId(event.target.value)
+                          }
+                        >
+                          <option value="">
+                            {l(
+                              "كل المبنى / بدون زون",
+                              "Whole building / no zone",
+                            )}
+                          </option>
+                          {building?.zones
+                            .filter(
+                              (zone) =>
+                                !zone.floorId ||
+                                !floorId ||
+                                zone.floorId === floorId,
+                            )
+                            .map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name}
+                              </option>
+                            ))}
+                        </select>
+                        {!project.locationLevels.find(
+                          (level) => level.id === locationLevelId,
+                        )?.parentLevelId && (
+                          <select
+                            aria-label={l(
+                              "المكتب المرتبط بالقيمة",
+                              "Related office",
+                            )}
+                            value={locationOfficeId}
+                            disabled={!buildingId}
+                            onChange={(event) =>
+                              setLocationOfficeId(event.target.value)
+                            }
+                          >
+                            <option value="">
+                              {l("أي مكتب", "Any office")}
+                            </option>
+                            {building?.offices
+                              .filter(
+                                (office) =>
+                                  (!floorId ||
+                                    !office.floorId ||
+                                    office.floorId === floorId) &&
+                                  (!officeZoneId ||
+                                    !office.zoneId ||
+                                    office.zoneId === officeZoneId),
+                              )
+                              .map((office) => (
+                                <option key={office.id} value={office.id}>
+                                  {office.name}
+                                </option>
+                              ))}
+                          </select>
+                        )}
+                        {project.locationLevels.find(
+                          (level) => level.id === locationLevelId,
+                        )?.parentLevelId && (
+                          <select
+                            aria-label={l(
+                              "قيمة المستوى السابق",
+                              "Preceding level value",
+                            )}
+                            value={locationParentOptionId}
+                            onChange={(event) =>
+                              setLocationParentOptionId(event.target.value)
+                            }
+                            required
+                          >
+                            <option value="">
+                              {l(
+                                "اختر القيمة السابقة",
+                                "Choose preceding value",
+                              )}
+                            </option>
+                            {project.locationLevels
+                              .find(
+                                (level) =>
+                                  level.id ===
+                                  project.locationLevels.find(
+                                    (item) => item.id === locationLevelId,
+                                  )?.parentLevelId,
+                              )
+                              ?.options.filter(
+                                (option) =>
+                                  !option.buildingId ||
+                                  option.buildingId === buildingId,
+                              )
+                              .map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.name}
+                                </option>
+                              ))}
+                          </select>
+                        )}
+                        <input
+                          value={locationOptionName}
+                          onChange={(event) =>
+                            setLocationOptionName(event.target.value)
+                          }
+                          placeholder={l(
+                            "اسم القيمة: مكتب 204",
+                            "Value name: Office 204",
+                          )}
+                          required
+                        />
+                        <button disabled={busy || !locationLevelId}>
+                          {l("إضافة قيمة", "Add value")}
+                        </button>
+                      </form>
+                      <div className="dynamic-level-list">
+                        {project.locationLevels.map((level) => (
+                          <article key={level.id}>
+                            <div>
+                              <strong>
+                                {language === "ar"
+                                  ? level.labelAr
+                                  : level.labelEn || level.key}
+                              </strong>
+                              <small>
+                                {level.parentLevelId
+                                  ? `${l("بعد", "After")} ${project.locationLevels.find((item) => item.id === level.parentLevelId)?.[language === "ar" ? "labelAr" : "labelEn"] || "—"} · `
+                                  : ""}
+                                {language === "ar"
+                                  ? level.labelEn || level.key
+                                  : level.key}{" "}
+                                ·{" "}
+                                {level.required
+                                  ? l("إلزامي", "Required")
+                                  : l("اختياري", "Optional")}
+                              </small>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void post({
+                                  action: "updateLocationLevel",
+                                  id: level.id,
+                                  labelAr: level.labelAr,
+                                  labelEn: level.labelEn,
+                                  required: !level.required,
+                                  sortOrder: level.sortOrder,
+                                })
+                              }
+                            >
+                              {level.required
+                                ? l("اجعله اختياريًا", "Make optional")
+                                : l("اجعله إلزاميًا", "Make required")}
+                            </button>
+                            <button
+                              type="button"
+                              className="danger-mini"
+                              onClick={() =>
+                                void removeLocation(
+                                  "deleteLocationLevel",
+                                  level.id,
+                                  level.labelAr,
+                                )
+                              }
+                            >
+                              {l("حذف المستوى", "Delete level")}
+                            </button>
+                            <div>
+                              {level.options
+                                .filter(
+                                  (option) =>
+                                    !buildingId ||
+                                    !option.buildingId ||
+                                    option.buildingId === buildingId,
+                                )
+                                .map((option) => (
+                                  <span key={option.id}>
+                                    {option.name}
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void removeLocation(
+                                          "deleteLocationOption",
+                                          option.id,
+                                          option.name,
+                                        )
+                                      }
+                                    >
+                                      ×
+                                    </button>
+                                  </span>
+                                ))}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <small>
+                      {l(
+                        "لا توجد مستويات إضافية لهذا المشروع حتى الآن.",
+                        "No additional levels have been added to this project yet.",
+                      )}
+                    </small>
+                  )}
+                </section>
+              </article>
+
+              {config.currentUser.isSuperAdmin ? (
+                <article className="admin-card users-card" id="users">
+                  <div className="admin-card-head user-management-head">
+                    <span>03</span>
+                    <div>
+                      <h2>
+                        {l("المستخدمون والصلاحيات", "Users & permissions")}
+                      </h2>
+                      <p>
+                        {l(
+                          "حسابات دخول مباشرة دون تأكيد بريد، مع تحكم دقيق في المشاريع والتابات والإجراءات.",
+                          "Direct sign-in accounts without email confirmation, with granular project, module and action permissions.",
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="al-primary-button"
+                      onClick={openNewUser}
+                    >
+                      ＋ {l("مستخدم جديد", "New user")}
+                    </button>
+                  </div>
+                  <div className="professional-user-table">
+                    <div className="user-table-head">
+                      <span>{l("المستخدم", "User")}</span>
+                      <span>{l("الدور", "Role")}</span>
+                      <span>{l("النطاق", "Scope")}</span>
+                      <span>{l("الحالة", "Status")}</span>
+                      <span>{l("الإجراءات", "Actions")}</span>
+                    </div>
+                    {config.users.map((user) => (
+                      <div
+                        key={user.id}
+                        className={`user-table-row ${!user.active ? "inactive-user" : ""}`}
+                      >
+                        <p>
+                          <strong>{user.name || user.email}</strong>
+                          <small>{user.email}</small>
+                        </p>
+                        <b>
+                          {language === "ar"
+                            ? roleLabels[user.role]
+                            : user.role.replaceAll("_", " ")}
+                        </b>
+                        <em>
+                          {
+                            user.modulePermissions.filter(
+                              (permission) => permission.view,
+                            ).length
+                          }{" "}
+                          {l("تابات", "modules")} ·{" "}
+                          {user.isSuperAdmin
+                            ? l("كل المشاريع", "All projects")
+                            : `${user.projectIds.length} ${l("مشروع", "projects")}`}
+                        </em>
+                        <span
+                          className={
+                            user.active && user.user_id
+                              ? "user-status-active"
+                              : "user-status-disabled"
+                          }
+                        >
+                          {!user.active
+                            ? l("معطّل", "Disabled")
+                            : user.user_id
+                              ? l("نشط", "Active")
+                              : l("بدون دخول", "No login")}
+                        </span>
+                        <div className="user-actions">
+                          <button type="button" onClick={() => editUser(user)}>
+                            {l("تعديل", "Edit")}
+                          </button>
+                          {user.user_id && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => {
+                                setPasswordTarget(user);
+                                setReplacementPassword("");
+                                setReplacementPasswordConfirm("");
+                                setError("");
+                              }}
+                            >
+                              {l("كلمة المرور", "Password")}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className={
+                              user.active ? "danger-mini" : "success-mini"
+                            }
+                            disabled={busy || user.id === config.currentUser.id}
+                            onClick={() =>
+                              void post({
+                                action: "setUserActive",
+                                userId: user.id,
+                                active: !user.active,
+                              })
+                            }
+                          >
+                            {user.active
+                              ? l("تعطيل", "Disable")
+                              : l("تفعيل", "Enable")}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              ) : (
+                <article className="admin-card users-card super-admin-only">
+                  <div className="admin-card-head">
+                    <span>03</span>
+                    <div>
+                      <h2>
+                        {l("المستخدمون والصلاحيات", "Users & permissions")}
+                      </h2>
+                      <p>
+                        {l(
+                          "إدارة الحسابات محصورة بالسوبر أدمن.",
+                          "Account management is restricted to the super administrator.",
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </article>
+              )}
+
+              <article className="admin-card tree-card">
+                <div className="admin-card-head">
+                  <span>04</span>
+                  <div>
+                    <h2>
+                      {l(
+                        "إدارة المباني والطوابق والزونات والمستويات الإضافية",
+                        "Manage buildings, floors, zones & additional levels",
+                      )}
+                    </h2>
+                    <p>
+                      {l(
+                        "تعديل أو حذف عناصر الهيكل من مكان واحد.",
+                        "Edit or remove hierarchy items from one workspace.",
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="master-tree">
+                  {config.projects.length === 0 ? (
+                    <p>
+                      {l(
+                        "لا توجد مشاريع مسجلة حتى الآن.",
+                        "No projects have been created yet.",
+                      )}
+                    </p>
+                  ) : (
+                    config.projects.map((item) => (
+                      <details key={item.id}>
+                        <summary>
+                          <strong>{item.name}</strong>
+                          <span>
+                            {item.buildings.length} {l("موقع", "sites")}
+                          </span>
+                          <em>
+                            {item.requireBuilding
+                              ? l("المبنى مطلوب", "Building required")
+                              : l("المبنى اختياري", "Building optional")}{" "}
+                            •{" "}
+                            {item.requireFloor
+                              ? l("الطابق مطلوب", "Floor required")
+                              : l("الطابق اختياري", "Floor optional")}{" "}
+                            •{" "}
+                            {item.requireZone
+                              ? l("الزون مطلوب", "Zone required")
+                              : l("الزون اختياري", "Zone optional")}{" "}
+                            •{" "}
+                            {(item.locationLevels || [])
+                              .map(
+                                (level) =>
+                                  `${language === "ar" ? level.labelAr : level.labelEn || level.key} ${level.required ? l("مطلوب", "required") : l("اختياري", "optional")}`,
+                              )
+                              .join(" • ")}
+                          </em>
+                        </summary>
+                        {item.buildings.length === 0 ? (
+                          <p className="tree-empty">
+                            {l(
+                              "لم تتم إضافة مبانٍ لهذا المشروع.",
+                              "No buildings have been added to this project.",
+                            )}
+                          </p>
+                        ) : (
+                          item.buildings.map((site) => (
+                            <div
+                              className="tree-site managed-site"
+                              key={site.id}
+                            >
+                              <div className="tree-row">
+                                <b>{site.name}</b>
+                                <div>
+                                  <button
+                                    onClick={() =>
+                                      void renameLocation(
+                                        "updateBuilding",
+                                        site.id,
+                                        site.name,
+                                      )
+                                    }
+                                  >
+                                    {l("تعديل", "Edit")}
+                                  </button>
+                                  <button
+                                    className="danger-mini"
+                                    onClick={() =>
+                                      void removeLocation(
+                                        "archiveBuilding",
+                                        site.id,
+                                        site.name,
+                                      )
+                                    }
+                                  >
+                                    {l("أرشفة", "Archive")}
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="tree-children">
+                                <section>
+                                  <h4>{l("الطوابق", "Floors")}</h4>
+                                  {site.floors.length === 0 ? (
+                                    <small>
+                                      {l("لا توجد طوابق", "No floors")}
+                                    </small>
+                                  ) : (
+                                    site.floors.map((floor) => (
+                                      <div
+                                        className="tree-child"
+                                        key={floor.id}
+                                      >
+                                        <span>{floor.name}</span>
+                                        <div>
+                                          <button
+                                            onClick={() =>
+                                              void renameLocation(
+                                                "updateFloor",
+                                                floor.id,
+                                                floor.name,
+                                                { sortOrder: floor.sortOrder },
+                                              )
+                                            }
+                                          >
+                                            {l("تعديل", "Edit")}
+                                          </button>
+                                          <button
+                                            className="danger-mini"
+                                            onClick={() =>
+                                              void removeLocation(
+                                                "deleteFloor",
+                                                floor.id,
+                                                floor.name,
+                                              )
+                                            }
+                                          >
+                                            {l("حذف", "Delete")}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </section>
+                                <section>
+                                  <h4>{l("الزونات", "Zones")}</h4>
+                                  {site.zones.length === 0 ? (
+                                    <small>
+                                      {l("لا توجد زونات", "No zones")}
+                                    </small>
+                                  ) : (
+                                    site.zones.map((zone) => (
+                                      <div className="tree-child" key={zone.id}>
+                                        <span>
+                                          {zone.name}
+                                          <small>
+                                            {site.floors.find(
+                                              (floor) =>
+                                                floor.id === zone.floorId,
+                                            )?.name ||
+                                              l("كل المبنى", "Whole building")}
+                                          </small>
+                                        </span>
+                                        <div>
+                                          <button
+                                            onClick={() =>
+                                              void renameLocation(
+                                                "updateZone",
+                                                zone.id,
+                                                zone.name,
+                                                { floorId: zone.floorId || "" },
+                                              )
+                                            }
+                                          >
+                                            {l("تعديل", "Edit")}
+                                          </button>
+                                          <button
+                                            className="danger-mini"
+                                            onClick={() =>
+                                              void removeLocation(
+                                                "deleteZone",
+                                                zone.id,
+                                                zone.name,
+                                              )
+                                            }
+                                          >
+                                            {l("حذف", "Delete")}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </section>
+                                <section>
+                                  <h4>
+                                    {l(
+                                      "مكاتب قديمة (للتوافق)",
+                                      "Legacy offices (compatibility)",
+                                    )}
+                                  </h4>
+                                  {site.offices.length === 0 ? (
+                                    <small>
+                                      {l("لا توجد مكاتب", "No offices")}
+                                    </small>
+                                  ) : (
+                                    site.offices.map((office) => (
+                                      <div
+                                        className="tree-child"
+                                        key={office.id}
+                                      >
+                                        <span>
+                                          {office.name}
+                                          <small>
+                                            {site.floors.find(
+                                              (floor) =>
+                                                floor.id === office.floorId,
+                                            )?.name ||
+                                              l(
+                                                "كل المبنى",
+                                                "Whole building",
+                                              )}{" "}
+                                            •{" "}
+                                            {site.zones.find(
+                                              (zone) =>
+                                                zone.id === office.zoneId,
+                                            )?.name || l("بدون زون", "No zone")}
+                                          </small>
+                                        </span>
+                                        <div>
+                                          <button
+                                            onClick={() =>
+                                              void renameLocation(
+                                                "updateOffice",
+                                                office.id,
+                                                office.name,
+                                                {
+                                                  floorId: office.floorId || "",
+                                                  zoneId: office.zoneId || "",
+                                                },
+                                              )
+                                            }
+                                          >
+                                            {l("تعديل", "Edit")}
+                                          </button>
+                                          <button
+                                            className="danger-mini"
+                                            onClick={() =>
+                                              void removeLocation(
+                                                "deleteOffice",
+                                                office.id,
+                                                office.name,
+                                              )
+                                            }
+                                          >
+                                            {l("حذف", "Delete")}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </section>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </details>
+                    ))
+                  )}
+                </div>
+              </article>
+
+              <article className="admin-card custom-fields-card" id="rules">
+                <div className="admin-card-head">
+                  <span>05</span>
+                  <div>
+                    <h2>{l("حقول المسح المخصصة", "Custom survey fields")}</h2>
+                    <p>
+                      {l(
+                        "أنشئ مسودة، أضف الحقول، ثم انشرها للمساحين.",
+                        "Create a draft, add fields, then publish it to surveyors.",
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="config-toolbar">
+                  <label>
+                    {l("المشروع", "Project")}
+                    <select
+                      value={projectId}
+                      onChange={(event) => selectProject(event.target.value)}
+                    >
+                      <option value="">
+                        {l("اختر المشروع", "Choose project")}
+                      </option>
+                      {config.projects.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="version-pills">
+                    <span>
+                      {l("المنشورة", "Published")}: v
+                      {project?.publishedConfig?.version || "—"}
+                    </span>
+                    <span className={project?.draftConfig ? "has-draft" : ""}>
+                      {l("المسودة", "Draft")}:{" "}
+                      {project?.draftConfig
+                        ? `v${project.draftConfig.version}`
+                        : l("لا توجد", "None")}
+                    </span>
+                  </div>
+                  {project && !project.draftConfig && (
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void post({
+                          action: "createConfigDraft",
+                          projectId: project.id,
+                        })
+                      }
+                    >
+                      {l("إنشاء مسودة", "Create draft")}
+                    </button>
+                  )}
+                  {project?.draftConfig && (
+                    <>
+                      <button
+                        className="preset-button"
+                        disabled={busy}
+                        onClick={() =>
+                          void post({
+                            action: "addSuggestedFields",
+                            configId: project.draftConfig?.id,
+                          })
+                        }
+                      >
+                        ＋{" "}
+                        {l(
+                          "إضافة حقول المسح والموبايل",
+                          "Add mobile survey fields",
+                        )}
+                      </button>
+                      <button
+                        className="publish-button"
+                        disabled={busy}
+                        onClick={() =>
+                          void post({
+                            action: "publishConfig",
+                            configId: project.draftConfig?.id,
+                          })
+                        }
+                      >
+                        {l("نشر النسخة", "Publish version")} v
+                        {project.draftConfig.version}
+                      </button>
+                    </>
+                  )}
+                </div>
+                {!project ? (
+                  <p className="admin-placeholder">
+                    {l(
+                      "اختر مشروعًا لإدارة حقوله.",
+                      "Choose a project to manage its fields.",
+                    )}
+                  </p>
+                ) : !project.draftConfig ? (
+                  <p className="admin-placeholder">
+                    {l(
+                      "النسخة المنشورة تعمل حاليًا. أنشئ مسودة آمنة قبل التعديل.",
+                      "The published version remains active. Create a safe draft before editing.",
+                    )}
+                  </p>
+                ) : (
+                  <>
+                    <form
+                      className="custom-field-form"
+                      onSubmit={saveCustomField}
+                    >
+                      <div className="custom-field-grid">
+                        <label>
+                          {l("رمز الحقل", "Field key")}
+                          <input
+                            className="ltr-input"
+                            value={fieldDraft.key}
+                            disabled={Boolean(fieldDraft.id)}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                key: event.target.value
+                                  .toLowerCase()
+                                  .replace(/[^a-z0-9_]/g, "_"),
+                              }))
+                            }
+                            placeholder="power_supply_location"
+                            required
+                          />
+                        </label>
+                        <label>
+                          {l("الاسم بالعربي", "Arabic label")}
+                          <input
+                            value={fieldDraft.labelAr}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                labelAr: event.target.value,
+                              }))
+                            }
+                            placeholder="مكان التغذية"
+                            required
+                          />
+                        </label>
+                        <label>
+                          {l("الاسم بالإنجليزي", "English label")}
+                          <input
+                            value={fieldDraft.labelEn}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                labelEn: event.target.value,
+                              }))
+                            }
+                            placeholder="Power Supply Location"
+                          />
+                        </label>
+                        <label>
+                          {l("نوع الحقل", "Field type")}
+                          <select
+                            value={fieldDraft.type}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                type: event.target.value as FieldType,
+                              }))
+                            }
+                          >
+                            {Object.entries(
+                              language === "ar"
+                                ? fieldTypeLabels
+                                : fieldTypeLabelsEn,
+                            ).map(([key, label]) => (
+                              <option key={key} value={key}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          {l("وحدة القياس", "Unit")}
+                          <input
+                            value={fieldDraft.unit}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                unit: event.target.value,
+                              }))
+                            }
+                            placeholder="kg / kW / V"
+                          />
+                        </label>
+                        <label>
+                          {l("الترتيب", "Order")}
+                          <input
+                            type="number"
+                            min="0"
+                            value={fieldDraft.sortOrder}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                sortOrder: Number(event.target.value),
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
+                      <label>
+                        {l(
+                          "أنواع الأصول التي يظهر لها الحقل — اتركه فارغًا ليظهر للجميع",
+                          "Asset types that use this field — leave blank for all",
+                        )}
+                        <input
+                          value={fieldDraft.assetTypesText}
+                          onChange={(event) =>
+                            setFieldDraft((current) => ({
+                              ...current,
+                              assetTypesText: event.target.value,
+                            }))
+                          }
+                          placeholder="Air Conditioner, Chiller"
+                        />
+                      </label>
+                      {fieldDraft.type === "select" && (
+                        <label>
+                          {l(
+                            "الخيارات — سطر لكل خيار: code|العربي|English",
+                            "Options — one line each: code|Arabic|English",
+                          )}
+                          <textarea
+                            className="ltr-input"
+                            value={fieldDraft.optionsText}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                optionsText: event.target.value,
+                              }))
+                            }
+                            placeholder={
+                              "good|جيدة|Good\nrepair|تحتاج صيانة|Needs repair"
+                            }
+                            required
+                          />
+                        </label>
+                      )}
+                      <div className="field-switches">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={fieldDraft.required}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                required: event.target.checked,
+                              }))
+                            }
+                          />{" "}
+                          {l("حقل إلزامي", "Required")}
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={fieldDraft.enabled}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                enabled: event.target.checked,
+                              }))
+                            }
+                          />{" "}
+                          {l("مفعّل", "Enabled")}
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={fieldDraft.aiExtract}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                aiExtract: event.target.checked,
+                              }))
+                            }
+                          />{" "}
+                          {l("يحاول AI استخراجه", "AI extraction")}
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={fieldDraft.showInReports}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                showInReports: event.target.checked,
+                              }))
+                            }
+                          />{" "}
+                          {l("يظهر في التقارير", "Show in reports")}
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={fieldDraft.showInQr}
+                            onChange={(event) =>
+                              setFieldDraft((current) => ({
+                                ...current,
+                                showInQr: event.target.checked,
+                              }))
+                            }
+                          />{" "}
+                          {l("يظهر في QR", "Show in QR")}
+                        </label>
+                      </div>
+                      <div className="field-form-actions">
+                        <button disabled={busy}>
+                          {fieldDraft.id
+                            ? l("حفظ التعديل", "Save changes")
+                            : l("إضافة الحقل", "Add field")}
+                        </button>
+                        {fieldDraft.id && (
+                          <button
+                            type="button"
+                            className="secondary-admin"
+                            onClick={() => setFieldDraft(blankField)}
+                          >
+                            {l("إلغاء التعديل", "Cancel editing")}
+                          </button>
+                        )}
+                      </div>
+                    </form>
+                    <div className="custom-fields-list">
+                      {project.draftConfig.fields.length === 0 ? (
+                        <p>
+                          {l(
+                            "لا توجد حقول مخصصة في المسودة.",
+                            "No custom fields in this draft.",
+                          )}
+                        </p>
+                      ) : (
+                        project.draftConfig.fields.map((field) => (
+                          <div
+                            key={field.id}
+                            className={!field.enabled ? "disabled-field" : ""}
+                          >
+                            <span className="field-order">
+                              {field.sortOrder}
+                            </span>
+                            <p>
+                              <strong>
+                                {language === "ar"
+                                  ? field.labelAr
+                                  : field.labelEn || field.key}
+                                {field.unit ? ` (${field.unit})` : ""}
+                              </strong>
+                              <small>
+                                {language === "ar"
+                                  ? field.labelEn || field.key
+                                  : field.key}{" "}
+                                •{" "}
+                                {language === "ar"
+                                  ? fieldTypeLabels[field.type]
+                                  : fieldTypeLabelsEn[field.type]}{" "}
+                                •{" "}
+                                {field.required
+                                  ? l("إلزامي", "Required")
+                                  : l("اختياري", "Optional")}{" "}
+                                •{" "}
+                                {field.assetTypes.length
+                                  ? field.assetTypes.join("، ")
+                                  : l("كل أنواع الأصول", "All asset types")}
+                              </small>
+                            </p>
+                            <button onClick={() => editCustomField(field)}>
+                              {l("تعديل", "Edit")}
+                            </button>
+                            <button
+                              className="toggle-field"
+                              disabled={busy}
+                              onClick={() =>
+                                void post({
+                                  action: "setCustomFieldEnabled",
+                                  configId: project.draftConfig?.id,
+                                  fieldId: field.id,
+                                  enabled: !field.enabled,
+                                })
+                              }
+                            >
+                              {field.enabled
+                                ? l("تعطيل", "Disable")
+                                : l("تفعيل", "Enable")}
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </>
+                )}
+              </article>
+
+              <article className="admin-card audit-card" id="logs">
+                <div className="admin-card-head">
+                  <span>06</span>
+                  <div>
+                    <h2>
+                      {l(
+                        "سجل من أضاف أو عدّل كل أصل",
+                        "Asset change audit log",
+                      )}
+                    </h2>
+                    <p>
+                      {l(
+                        "هوية المستخدم، العملية، رقم الأصل، المشروع والتوقيت محفوظة تلقائيًا.",
+                        "User identity, action, asset number, project and timestamp are recorded automatically.",
+                      )}
+                    </p>
+                  </div>
+                  <div className="audit-tabs">
+                    <button
+                      type="button"
+                      className={auditFilter === "assets" ? "active" : ""}
+                      onClick={() => setAuditFilter("assets")}
+                    >
+                      {l("سجل الأصول", "Asset log")}
+                    </button>
+                    <button
+                      type="button"
+                      className={auditFilter === "all" ? "active" : ""}
+                      onClick={() => setAuditFilter("all")}
+                    >
+                      {l("كل العمليات", "All activity")}
+                    </button>
+                  </div>
+                </div>
+                {auditError && (
+                  <div className="al-alert warning admin-section-warning" role="status">
+                    {auditError}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuditError("");
+                        setAuditLoading(true);
+                        setAuditLoadAttempt((attempt) => attempt + 1);
+                      }}
+                    >
+                      {l("إعادة تحميل السجل", "Retry log")}
+                    </button>
+                  </div>
+                )}
+                <div className="audit-list">
+                  {auditLoading && filteredAuditLogs.length === 0 ? (
+                    <p className="admin-placeholder">
+                      {l("جاري تحميل سجل العمليات…", "Loading activity log…")}
+                    </p>
+                  ) : filteredAuditLogs.length === 0 && !auditError ? (
+                    <p className="admin-placeholder">
+                      {l(
+                        "لا توجد عمليات مطابقة بعد.",
+                        "No matching activity yet.",
+                      )}
+                    </p>
+                  ) : (
+                    filteredAuditLogs.map((log) => (
+                      <div key={log.id}>
+                        <span>{auditAction(log)}</span>
+                        <p>
+                          <strong>{log.actor_email || "System"}</strong>
+                          <small>
+                            {log.details.asset_no ||
+                              log.details.name ||
+                              log.entity_id ||
+                              "—"}{" "}
+                            •{" "}
+                            {config.projects.find(
+                              (item) => item.id === log.project_id,
+                            )?.name || log.entity_type}
+                          </small>
+                        </p>
+                        <time>
+                          {new Intl.DateTimeFormat(
+                            language === "ar" ? "ar-AE" : "en-GB",
+                            { dateStyle: "medium", timeStyle: "short" },
+                          ).format(new Date(log.created_at))}
+                        </time>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </article>
+            </section>
+          </>
+        )
+      )}
+      {categoryDeleteTarget && (
+        <div className="al-dialog-backdrop" role="presentation">
+          <section
+            className="al-dialog admin-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-category-title"
+          >
+            <span className="al-dialog-icon danger">!</span>
+            <h3 id="delete-category-title">
+              {l("حذف التصنيف نهائيًا؟", "Permanently delete category?")}
+            </h3>
+            <p>
+              {l(
+                "إذا كان التصنيف مستخدمًا في أي أصل فسيمنع النظام الحذف ويطلب تعطيله للحفاظ على السجل.",
+                "If any asset uses this category, deletion is blocked and you must disable it to preserve history.",
+              )}
+            </p>
+            <strong>
+              {language === "ar"
+                ? categoryDeleteTarget.labelAr
+                : categoryDeleteTarget.labelEn}
+            </strong>
+            <div>
+              <button
+                className="al-secondary-button"
+                disabled={busy}
+                onClick={() => setCategoryDeleteTarget(null)}
+              >
+                {l("إلغاء", "Cancel")}
+              </button>
+              <button
+                className="al-danger-button"
+                disabled={busy}
+                onClick={() =>
+                  void post({
+                    action: "deleteAssetCategory",
+                    id: categoryDeleteTarget.id,
+                  }).then((success) => {
+                    if (success) setCategoryDeleteTarget(null);
+                  })
+                }
+              >
+                {l("حذف نهائي", "Delete permanently")}
+              </button>
+            </div>
           </section>
-        </article>
-
-        {config.currentUser.isSuperAdmin ? <article className="admin-card users-card" id="users">
-          <div className="admin-card-head user-management-head"><span>03</span><div><h2>{l("المستخدمون والصلاحيات", "Users & permissions")}</h2><p>{l("حسابات دخول مباشرة دون تأكيد بريد، مع تحكم دقيق في المشاريع والتابات والإجراءات.", "Direct sign-in accounts without email confirmation, with granular project, module and action permissions.")}</p></div><button type="button" className="al-primary-button" onClick={openNewUser}>＋ {l("مستخدم جديد", "New user")}</button></div>
-          <div className="professional-user-table">
-            <div className="user-table-head"><span>{l("المستخدم", "User")}</span><span>{l("الدور", "Role")}</span><span>{l("النطاق", "Scope")}</span><span>{l("الحالة", "Status")}</span><span>{l("الإجراءات", "Actions")}</span></div>
-            {config.users.map(user => <div key={user.id} className={`user-table-row ${!user.active ? "inactive-user" : ""}`}><p><strong>{user.name || user.email}</strong><small>{user.email}</small></p><b>{language === "ar" ? roleLabels[user.role] : user.role.replaceAll("_", " ")}</b><em>{user.modulePermissions.filter(permission => permission.view).length} {l("تابات", "modules")} · {user.role === "admin" ? l("كل المشاريع", "All projects") : `${user.projectIds.length} ${l("مشروع", "projects")}`}</em><span className={user.active && user.user_id ? "user-status-active" : "user-status-disabled"}>{!user.active ? l("معطّل", "Disabled") : user.user_id ? l("نشط", "Active") : l("بدون دخول", "No login")}</span><div className="user-actions"><button type="button" onClick={() => editUser(user)}>{l("تعديل", "Edit")}</button>{user.user_id && <button type="button" disabled={busy} onClick={() => { setPasswordTarget(user); setReplacementPassword(""); setReplacementPasswordConfirm(""); setError(""); }}>{l("كلمة المرور", "Password")}</button>}<button type="button" className={user.active ? "danger-mini" : "success-mini"} disabled={busy || user.id === config.currentUser.id} onClick={() => void post({ action: "setUserActive", userId: user.id, active: !user.active })}>{user.active ? l("تعطيل", "Disable") : l("تفعيل", "Enable")}</button></div></div>)}
-          </div>
-        </article> : <article className="admin-card users-card super-admin-only"><div className="admin-card-head"><span>03</span><div><h2>{l("المستخدمون والصلاحيات", "Users & permissions")}</h2><p>{l("إدارة الحسابات محصورة بالسوبر أدمن.", "Account management is restricted to the super administrator.")}</p></div></div></article>}
-
-        <article className="admin-card tree-card"><div className="admin-card-head"><span>04</span><div><h2>{l("إدارة المباني والطوابق والزونات والمستويات الإضافية", "Manage buildings, floors, zones & additional levels")}</h2><p>{l("تعديل أو حذف عناصر الهيكل من مكان واحد.", "Edit or remove hierarchy items from one workspace.")}</p></div></div><div className="master-tree">{config.projects.length === 0 ? <p>{l("لا توجد مشاريع مسجلة حتى الآن.", "No projects have been created yet.")}</p> : config.projects.map(item => <details key={item.id}><summary><strong>{item.name}</strong><span>{item.buildings.length} {l("موقع", "sites")}</span><em>{item.requireBuilding ? l("المبنى مطلوب", "Building required") : l("المبنى اختياري", "Building optional")} • {item.requireFloor ? l("الطابق مطلوب", "Floor required") : l("الطابق اختياري", "Floor optional")} • {item.requireZone ? l("الزون مطلوب", "Zone required") : l("الزون اختياري", "Zone optional")} • {(item.locationLevels || []).map(level => `${language === "ar" ? level.labelAr : (level.labelEn || level.key)} ${level.required ? l("مطلوب", "required") : l("اختياري", "optional")}`).join(" • ")}</em></summary>{item.buildings.length === 0 ? <p className="tree-empty">{l("لم تتم إضافة مبانٍ لهذا المشروع.", "No buildings have been added to this project.")}</p> : item.buildings.map(site => <div className="tree-site managed-site" key={site.id}><div className="tree-row"><b>{site.name}</b><div><button onClick={() => void renameLocation("updateBuilding", site.id, site.name)}>{l("تعديل", "Edit")}</button><button className="danger-mini" onClick={() => void removeLocation("archiveBuilding", site.id, site.name)}>{l("أرشفة", "Archive")}</button></div></div><div className="tree-children"><section><h4>{l("الطوابق", "Floors")}</h4>{site.floors.length === 0 ? <small>{l("لا توجد طوابق", "No floors")}</small> : site.floors.map(floor => <div className="tree-child" key={floor.id}><span>{floor.name}</span><div><button onClick={() => void renameLocation("updateFloor", floor.id, floor.name, { sortOrder: floor.sortOrder })}>{l("تعديل", "Edit")}</button><button className="danger-mini" onClick={() => void removeLocation("deleteFloor", floor.id, floor.name)}>{l("حذف", "Delete")}</button></div></div>)}</section><section><h4>{l("الزونات", "Zones")}</h4>{site.zones.length === 0 ? <small>{l("لا توجد زونات", "No zones")}</small> : site.zones.map(zone => <div className="tree-child" key={zone.id}><span>{zone.name}<small>{site.floors.find(floor => floor.id === zone.floorId)?.name || l("كل المبنى", "Whole building")}</small></span><div><button onClick={() => void renameLocation("updateZone", zone.id, zone.name, { floorId: zone.floorId || "" })}>{l("تعديل", "Edit")}</button><button className="danger-mini" onClick={() => void removeLocation("deleteZone", zone.id, zone.name)}>{l("حذف", "Delete")}</button></div></div>)}</section><section><h4>{l("مكاتب قديمة (للتوافق)", "Legacy offices (compatibility)")}</h4>{site.offices.length === 0 ? <small>{l("لا توجد مكاتب", "No offices")}</small> : site.offices.map(office => <div className="tree-child" key={office.id}><span>{office.name}<small>{site.floors.find(floor => floor.id === office.floorId)?.name || l("كل المبنى", "Whole building")} • {site.zones.find(zone => zone.id === office.zoneId)?.name || l("بدون زون", "No zone")}</small></span><div><button onClick={() => void renameLocation("updateOffice", office.id, office.name, { floorId: office.floorId || "", zoneId: office.zoneId || "" })}>{l("تعديل", "Edit")}</button><button className="danger-mini" onClick={() => void removeLocation("deleteOffice", office.id, office.name)}>{l("حذف", "Delete")}</button></div></div>)}</section></div></div>)}</details>)}</div></article>
-
-        <article className="admin-card custom-fields-card" id="rules"><div className="admin-card-head"><span>05</span><div><h2>{l("حقول المسح المخصصة", "Custom survey fields")}</h2><p>{l("أنشئ مسودة، أضف الحقول، ثم انشرها للمساحين.", "Create a draft, add fields, then publish it to surveyors.")}</p></div></div>
-          <div className="config-toolbar"><label>{l("المشروع", "Project")}<select value={projectId} onChange={event => selectProject(event.target.value)}><option value="">{l("اختر المشروع", "Choose project")}</option>{config.projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><div className="version-pills"><span>{l("المنشورة", "Published")}: v{project?.publishedConfig?.version || "—"}</span><span className={project?.draftConfig ? "has-draft" : ""}>{l("المسودة", "Draft")}: {project?.draftConfig ? `v${project.draftConfig.version}` : l("لا توجد", "None")}</span></div>{project && !project.draftConfig && <button disabled={busy} onClick={() => void post({ action: "createConfigDraft", projectId: project.id })}>{l("إنشاء مسودة", "Create draft")}</button>}{project?.draftConfig && <><button className="preset-button" disabled={busy} onClick={() => void post({ action: "addSuggestedFields", configId: project.draftConfig?.id })}>＋ {l("إضافة حقول المسح والموبايل", "Add mobile survey fields")}</button><button className="publish-button" disabled={busy} onClick={() => void post({ action: "publishConfig", configId: project.draftConfig?.id })}>{l("نشر النسخة", "Publish version")} v{project.draftConfig.version}</button></>}</div>
-          {!project ? <p className="admin-placeholder">{l("اختر مشروعًا لإدارة حقوله.", "Choose a project to manage its fields.")}</p> : !project.draftConfig ? <p className="admin-placeholder">{l("النسخة المنشورة تعمل حاليًا. أنشئ مسودة آمنة قبل التعديل.", "The published version remains active. Create a safe draft before editing.")}</p> : <><form className="custom-field-form" onSubmit={saveCustomField}>
-            <div className="custom-field-grid"><label>{l("رمز الحقل", "Field key")}<input className="ltr-input" value={fieldDraft.key} disabled={Boolean(fieldDraft.id)} onChange={event => setFieldDraft(current => ({ ...current, key: event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") }))} placeholder="power_supply_location" required /></label><label>{l("الاسم بالعربي", "Arabic label")}<input value={fieldDraft.labelAr} onChange={event => setFieldDraft(current => ({ ...current, labelAr: event.target.value }))} placeholder="مكان التغذية" required /></label><label>{l("الاسم بالإنجليزي", "English label")}<input value={fieldDraft.labelEn} onChange={event => setFieldDraft(current => ({ ...current, labelEn: event.target.value }))} placeholder="Power Supply Location" /></label><label>{l("نوع الحقل", "Field type")}<select value={fieldDraft.type} onChange={event => setFieldDraft(current => ({ ...current, type: event.target.value as FieldType }))}>{Object.entries(language === "ar" ? fieldTypeLabels : fieldTypeLabelsEn).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>{l("وحدة القياس", "Unit")}<input value={fieldDraft.unit} onChange={event => setFieldDraft(current => ({ ...current, unit: event.target.value }))} placeholder="kg / kW / V" /></label><label>{l("الترتيب", "Order")}<input type="number" min="0" value={fieldDraft.sortOrder} onChange={event => setFieldDraft(current => ({ ...current, sortOrder: Number(event.target.value) }))} /></label></div>
-            <label>{l("أنواع الأصول التي يظهر لها الحقل — اتركه فارغًا ليظهر للجميع", "Asset types that use this field — leave blank for all")}<input value={fieldDraft.assetTypesText} onChange={event => setFieldDraft(current => ({ ...current, assetTypesText: event.target.value }))} placeholder="Air Conditioner, Chiller" /></label>
-            {fieldDraft.type === "select" && <label>{l("الخيارات — سطر لكل خيار: code|العربي|English", "Options — one line each: code|Arabic|English")}<textarea className="ltr-input" value={fieldDraft.optionsText} onChange={event => setFieldDraft(current => ({ ...current, optionsText: event.target.value }))} placeholder={"good|جيدة|Good\nrepair|تحتاج صيانة|Needs repair"} required /></label>}
-            <div className="field-switches"><label><input type="checkbox" checked={fieldDraft.required} onChange={event => setFieldDraft(current => ({ ...current, required: event.target.checked }))} /> {l("حقل إلزامي", "Required")}</label><label><input type="checkbox" checked={fieldDraft.enabled} onChange={event => setFieldDraft(current => ({ ...current, enabled: event.target.checked }))} /> {l("مفعّل", "Enabled")}</label><label><input type="checkbox" checked={fieldDraft.aiExtract} onChange={event => setFieldDraft(current => ({ ...current, aiExtract: event.target.checked }))} /> {l("يحاول AI استخراجه", "AI extraction")}</label><label><input type="checkbox" checked={fieldDraft.showInReports} onChange={event => setFieldDraft(current => ({ ...current, showInReports: event.target.checked }))} /> {l("يظهر في التقارير", "Show in reports")}</label><label><input type="checkbox" checked={fieldDraft.showInQr} onChange={event => setFieldDraft(current => ({ ...current, showInQr: event.target.checked }))} /> {l("يظهر في QR", "Show in QR")}</label></div><div className="field-form-actions"><button disabled={busy}>{fieldDraft.id ? l("حفظ التعديل", "Save changes") : l("إضافة الحقل", "Add field")}</button>{fieldDraft.id && <button type="button" className="secondary-admin" onClick={() => setFieldDraft(blankField)}>{l("إلغاء التعديل", "Cancel editing")}</button>}</div>
-          </form><div className="custom-fields-list">{project.draftConfig.fields.length === 0 ? <p>{l("لا توجد حقول مخصصة في المسودة.", "No custom fields in this draft.")}</p> : project.draftConfig.fields.map(field => <div key={field.id} className={!field.enabled ? "disabled-field" : ""}><span className="field-order">{field.sortOrder}</span><p><strong>{language === "ar" ? field.labelAr : (field.labelEn || field.key)}{field.unit ? ` (${field.unit})` : ""}</strong><small>{language === "ar" ? (field.labelEn || field.key) : field.key} • {language === "ar" ? fieldTypeLabels[field.type] : fieldTypeLabelsEn[field.type]} • {field.required ? l("إلزامي", "Required") : l("اختياري", "Optional")} • {field.assetTypes.length ? field.assetTypes.join("، ") : l("كل أنواع الأصول", "All asset types")}</small></p><button onClick={() => editCustomField(field)}>{l("تعديل", "Edit")}</button><button className="toggle-field" disabled={busy} onClick={() => void post({ action: "setCustomFieldEnabled", configId: project.draftConfig?.id, fieldId: field.id, enabled: !field.enabled })}>{field.enabled ? l("تعطيل", "Disable") : l("تفعيل", "Enable")}</button></div>)}</div></>}
-        </article>
-
-        <article className="admin-card audit-card" id="logs"><div className="admin-card-head"><span>06</span><div><h2>{l("سجل من أضاف أو عدّل كل أصل", "Asset change audit log")}</h2><p>{l("هوية المستخدم، العملية، رقم الأصل، المشروع والتوقيت محفوظة تلقائيًا.", "User identity, action, asset number, project and timestamp are recorded automatically.")}</p></div><div className="audit-tabs"><button className={auditFilter === "assets" ? "active" : ""} onClick={() => setAuditFilter("assets")}>{l("سجل الأصول", "Asset log")}</button><button className={auditFilter === "all" ? "active" : ""} onClick={() => setAuditFilter("all")}>{l("كل العمليات", "All activity")}</button></div></div><div className="audit-list">{filteredAuditLogs.length === 0 ? <p className="admin-placeholder">{l("لا توجد عمليات مطابقة بعد.", "No matching activity yet.")}</p> : filteredAuditLogs.map(log => <div key={log.id}><span>{auditAction(log)}</span><p><strong>{log.actor_email || "System"}</strong><small>{log.details.asset_no || log.details.name || log.entity_id || "—"} • {config.projects.find(item => item.id === log.project_id)?.name || log.entity_type}</small></p><time>{new Intl.DateTimeFormat(language === "ar" ? "ar-AE" : "en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(log.created_at))}</time></div>)}</div></article>
-      </section>
-    </>}
-    {categoryDeleteTarget && <div className="al-dialog-backdrop" role="presentation"><section className="al-dialog admin-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-category-title"><span className="al-dialog-icon danger">!</span><h3 id="delete-category-title">{l("حذف التصنيف نهائيًا؟", "Permanently delete category?")}</h3><p>{l("إذا كان التصنيف مستخدمًا في أي أصل فسيمنع النظام الحذف ويطلب تعطيله للحفاظ على السجل.", "If any asset uses this category, deletion is blocked and you must disable it to preserve history.")}</p><strong>{language === "ar" ? categoryDeleteTarget.labelAr : categoryDeleteTarget.labelEn}</strong><div><button className="al-secondary-button" disabled={busy} onClick={() => setCategoryDeleteTarget(null)}>{l("إلغاء", "Cancel")}</button><button className="al-danger-button" disabled={busy} onClick={() => void post({ action: "deleteAssetCategory", id: categoryDeleteTarget.id }).then(success => { if (success) setCategoryDeleteTarget(null); })}>{l("حذف نهائي", "Delete permanently")}</button></div></section></div>}
-    {categoryDialogOpen && <div className="al-dialog-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target && !busy) setCategoryDialogOpen(false); }}><form className="al-dialog admin-dialog category-dialog" role="dialog" aria-modal="true" aria-labelledby="category-dialog-title" onSubmit={saveCategory}><span className="al-dialog-icon category-dialog-swatch" style={{ background: categoryDraft.color }} /><h3 id="category-dialog-title">{categoryDraft.id ? l("تعديل تصنيف الأصل", "Edit asset category") : l("إضافة تصنيف أصل", "Add asset category")}</h3><p>{l("العمر والسعر قيم إرشادية فقط؛ أما حالة وأهمية كل أصل فتُدخل أثناء الإضافة.", "Life and price are suggestions only; condition and criticality are captured for every asset.")}</p><div className="category-dialog-grid"><label><span>{l("الاسم بالعربي", "Arabic name")}</span><input value={categoryDraft.labelAr} onChange={event => setCategoryDraft(current => ({ ...current, labelAr: event.target.value }))} required /></label><label><span>{l("الاسم بالإنجليزي", "English name")}</span><input className="ltr-input" value={categoryDraft.labelEn} onChange={event => setCategoryDraft(current => ({ ...current, labelEn: event.target.value }))} required /></label><label><span>{l("الرمز الداخلي", "Internal code")}</span><input className="ltr-input" value={categoryDraft.code} disabled={Boolean(categoryDraft.id)} onChange={event => setCategoryDraft(current => ({ ...current, code: event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") }))} placeholder="hvac" required /></label><label><span>{l("لون التصنيف", "Category color")}</span><input type="color" value={categoryDraft.color} onChange={event => setCategoryDraft(current => ({ ...current, color: event.target.value.toUpperCase() }))} /></label><label><span>{l("العمر المقترح (سنة)", "Suggested life (years)")}</span><input type="number" min="0.1" step="0.1" value={categoryDraft.defaultUsefulLifeYears} onChange={event => setCategoryDraft(current => ({ ...current, defaultUsefulLifeYears: event.target.value }))} /></label><label><span>{l("السعر التقريبي", "Estimated price")}</span><input type="number" min="0" step="0.01" value={categoryDraft.defaultEstimatedPrice} onChange={event => setCategoryDraft(current => ({ ...current, defaultEstimatedPrice: event.target.value }))} /></label><label><span>{l("العملة", "Currency")}</span><input className="ltr-input" maxLength={3} value={categoryDraft.currency} onChange={event => setCategoryDraft(current => ({ ...current, currency: event.target.value.toUpperCase() }))} /></label><label className="category-technical-fields"><span>{l("المواصفات الفنية للبحث", "Technical lookup fields")}</span><input className="ltr-input" value={categoryDraft.technicalFields} onChange={event => setCategoryDraft(current => ({ ...current, technicalFields: event.target.value }))} placeholder="capacityTons, refrigerant, ratedPower" /></label></div><div><button type="button" className="al-secondary-button" disabled={busy} onClick={() => setCategoryDialogOpen(false)}>{l("إلغاء", "Cancel")}</button><button className="al-primary-button" disabled={busy}>{busy ? l("جاري الحفظ…", "Saving…") : l("حفظ التصنيف", "Save category")}</button></div></form></div>}
-    {userDialogOpen && <div className="al-dialog-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target && !busy) setUserDialogOpen(false); }}><form className="al-dialog admin-dialog user-account-dialog" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title" onSubmit={saveUser}><span className="al-dialog-icon">{editingUserId ? "✎" : "+"}</span><h3 id="user-dialog-title">{editingUserId ? l("تعديل المستخدم وصلاحياته", "Edit user and permissions") : l("إنشاء حساب مباشر", "Create direct account")}</h3><p>{l("يستطيع المستخدم الدخول فورًا بالبريد وكلمة المرور دون رسالة تأكيد.", "The user can sign in immediately with email and password; no confirmation email is sent.")}</p><div className="user-fields"><label><span>{l("البريد الإلكتروني", "Email")}</span><input className="ltr-input" type="email" value={userEmail} onChange={event => setUserEmail(event.target.value)} placeholder="user@company.com" required /></label><label><span>{l("اسم المستخدم", "User name")}</span><input value={userName} onChange={event => setUserName(event.target.value)} required /></label><label><span>{l("نوع الحساب", "Account role")}</span><select value={userRole} onChange={event => { const role = event.target.value as UserRole; setUserRole(role); setUserModulePermissions(defaultModulePermissions(role)); }}>{(Object.keys(roleLabels) as UserRole[]).map(role => <option key={role} value={role}>{language === "ar" ? roleLabels[role] : roleLabelsEn[role]}</option>)}</select></label>{!editingUserId && <><label><span>{l("كلمة المرور", "Password")}</span><div className="password-input-wrap"><input className="ltr-input" type={showUserPassword ? "text" : "password"} autoComplete="new-password" minLength={10} value={userPassword} onChange={event => setUserPassword(event.target.value)} required /><button type="button" onClick={() => setShowUserPassword(value => !value)}>{showUserPassword ? l("إخفاء", "Hide") : l("إظهار", "Show")}</button></div><small>{l("10 أحرف على الأقل مع حرف كبير وصغير ورقم ورمز.", "At least 10 characters with uppercase, lowercase, number and symbol.")}</small></label><label><span>{l("تأكيد كلمة المرور", "Confirm password")}</span><input className="ltr-input" type={showUserPassword ? "text" : "password"} autoComplete="new-password" minLength={10} value={userPasswordConfirm} onChange={event => setUserPasswordConfirm(event.target.value)} required /></label></>}</div><div className="role-help"><div className="selected"><b>{language === "ar" ? roleLabels[userRole] : roleLabelsEn[userRole]}</b><span>{language === "ar" ? roleDescriptions[userRole] : roleDescriptionsEn[userRole]}</span></div></div><fieldset className="module-permissions-fieldset"><legend>{l("صلاحيات التابات والإجراءات", "Module and action permissions")}</legend><div className="module-permissions-table"><div className="permission-head"><b>{l("التاب", "Module")}</b>{[l("عرض", "View"), l("إضافة", "Create"), l("تعديل", "Edit"), l("حذف", "Delete"), l("اعتماد", "Approve"), l("تصدير", "Export")].map(label => <span key={label}>{label}</span>)}</div>{userModulePermissions.map((permission, index) => <div className="permission-row" key={permission.module}><b>{language === "ar" ? MODULE_LABELS[permission.module].ar : MODULE_LABELS[permission.module].en}</b>{(["view", "create", "edit", "delete", "approve", "export"] as ModuleAction[]).map(action => <label key={action}><input type="checkbox" checked={permission[action]} onChange={event => setModulePermission(index, action, event.target.checked)} aria-label={`${MODULE_LABELS[permission.module].en} ${action}`} /><span /></label>)}</div>)}</div></fieldset><fieldset><legend>{l("المشاريع المسموح بها", "Allowed projects")}</legend><div className="project-checks">{(config?.projects || []).map(item => <label className="check-row" key={item.id}><input type="checkbox" checked={userProjects.includes(item.id)} onChange={event => setUserProjects(current => event.target.checked ? [...current, item.id] : current.filter(id => id !== item.id))} /><span><b>{item.name}</b></span></label>)}</div></fieldset><div className="dialog-validation" aria-live="polite">{!editingUserId && userPassword && !isStrongPassword(userPassword) ? l("استخدم 10 أحرف على الأقل تشمل حرفًا كبيرًا وصغيرًا ورقمًا ورمزًا.", "Use at least 10 characters including uppercase, lowercase, a number and a symbol.") : !editingUserId && userPasswordConfirm && userPassword !== userPasswordConfirm ? l("كلمتا المرور غير متطابقتين.", "Passwords do not match.") : ""}</div><div><button type="button" className="al-secondary-button" disabled={busy} onClick={() => setUserDialogOpen(false)}>{l("إلغاء", "Cancel")}</button><button className="al-primary-button" disabled={busy || (!editingUserId && (!isStrongPassword(userPassword) || userPassword !== userPasswordConfirm))}>{busy ? l("جاري الحفظ…", "Saving…") : editingUserId ? l("حفظ التعديلات", "Save changes") : l("إنشاء الحساب", "Create account")}</button></div></form></div>}
-    {dialog && <div className="al-dialog-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target && !busy) setDialog(null); }}><section className="al-dialog admin-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-dialog-title"><span className={`al-dialog-icon ${dialog.mode === "confirm" ? "danger" : ""}`}>{dialog.mode === "confirm" ? "!" : "✎"}</span><h3 id="admin-dialog-title">{dialog.title}</h3><p>{dialog.description}</p>{dialog.mode === "rename" && <label><span>{l("الاسم الجديد", "New name")}</span><input autoFocus value={dialog.value} onChange={event => setDialog(current => current ? { ...current, value: event.target.value } : current)} onKeyDown={event => { if (event.key === "Enter") void submitDialog(); }} /></label>}<div><button className="al-secondary-button" disabled={busy} onClick={() => setDialog(null)}>{l("إلغاء", "Cancel")}</button><button className={dialog.mode === "confirm" ? "al-danger-button" : "al-primary-button"} disabled={busy || (dialog.mode === "rename" && !dialog.value.trim())} onClick={() => void submitDialog()}>{busy ? l("جاري الحفظ…", "Saving…") : dialog.mode === "confirm" ? l("تأكيد العملية", "Confirm") : l("حفظ الاسم", "Save name")}</button></div></section></div>}
-    {passwordTarget && <div className="al-dialog-backdrop" role="presentation" onMouseDown={event => { if (event.currentTarget === event.target && !busy) setPasswordTarget(null); }}><form className="al-dialog admin-dialog" role="dialog" aria-modal="true" aria-labelledby="reset-password-title" onSubmit={saveReplacementPassword}><span className="al-dialog-icon">🔐</span><h3 id="reset-password-title">{l("تغيير كلمة مرور", "Change password for")} {passwordTarget.name || passwordTarget.email}</h3><p>{l("اكتب كلمة المرور الجديدة التي سيستخدمها للدخول إلى النظام.", "Enter the new password this user will use to sign in.")}</p><label><span>{l("كلمة المرور الجديدة", "New password")}</span><input className="ltr-input" type="password" autoComplete="new-password" minLength={10} value={replacementPassword} onChange={event => setReplacementPassword(event.target.value)} required /></label><label><span>{l("تأكيد كلمة المرور", "Confirm password")}</span><input className="ltr-input" type="password" autoComplete="new-password" minLength={10} value={replacementPasswordConfirm} onChange={event => setReplacementPasswordConfirm(event.target.value)} required /></label><small>{l("يجب أن تشمل حرفًا كبيرًا وصغيرًا ورقمًا ورمزًا.", "Must include uppercase, lowercase, a number and a symbol.")}</small><div className="dialog-validation" aria-live="polite">{replacementPassword && !isStrongPassword(replacementPassword) ? l("كلمة المرور لا تحقق جميع المتطلبات.", "The password does not meet every requirement.") : replacementPasswordConfirm && replacementPassword !== replacementPasswordConfirm ? l("كلمتا المرور غير متطابقتين.", "Passwords do not match.") : ""}</div><div><button type="button" className="al-secondary-button" disabled={busy} onClick={() => setPasswordTarget(null)}>{l("إلغاء", "Cancel")}</button><button className="al-primary-button" disabled={busy || !isStrongPassword(replacementPassword) || replacementPassword !== replacementPasswordConfirm}>{busy ? l("جاري الحفظ…", "Saving…") : l("حفظ كلمة المرور", "Save password")}</button></div></form></div>}
-  </main>;
+        </div>
+      )}
+      {categoryDialogOpen && (
+        <div
+          className="al-dialog-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !busy)
+              setCategoryDialogOpen(false);
+          }}
+        >
+          <form
+            className="al-dialog admin-dialog category-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="category-dialog-title"
+            onSubmit={saveCategory}
+          >
+            <span
+              className="al-dialog-icon category-dialog-swatch"
+              style={{ background: categoryDraft.color }}
+            />
+            <h3 id="category-dialog-title">
+              {categoryDraft.id
+                ? l("تعديل تصنيف الأصل", "Edit asset category")
+                : l("إضافة تصنيف أصل", "Add asset category")}
+            </h3>
+            <p>
+              {l(
+                "العمر والسعر قيم إرشادية فقط؛ أما حالة وأهمية كل أصل فتُدخل أثناء الإضافة.",
+                "Life and price are suggestions only; condition and criticality are captured for every asset.",
+              )}
+            </p>
+            <div className="category-dialog-grid">
+              <label>
+                <span>{l("الاسم بالعربي", "Arabic name")}</span>
+                <input
+                  value={categoryDraft.labelAr}
+                  onChange={(event) =>
+                    setCategoryDraft((current) => ({
+                      ...current,
+                      labelAr: event.target.value,
+                    }))
+                  }
+                  required
+                />
+              </label>
+              <label>
+                <span>{l("الاسم بالإنجليزي", "English name")}</span>
+                <input
+                  className="ltr-input"
+                  value={categoryDraft.labelEn}
+                  onChange={(event) =>
+                    setCategoryDraft((current) => ({
+                      ...current,
+                      labelEn: event.target.value,
+                    }))
+                  }
+                  required
+                />
+              </label>
+              <label>
+                <span>{l("الرمز الداخلي", "Internal code")}</span>
+                <input
+                  className="ltr-input"
+                  value={categoryDraft.code}
+                  disabled={Boolean(categoryDraft.id)}
+                  onChange={(event) =>
+                    setCategoryDraft((current) => ({
+                      ...current,
+                      code: event.target.value
+                        .toLowerCase()
+                        .replace(/[^a-z0-9_]/g, "_"),
+                    }))
+                  }
+                  placeholder="hvac"
+                  required
+                />
+              </label>
+              <label>
+                <span>{l("لون التصنيف", "Category color")}</span>
+                <input
+                  type="color"
+                  value={categoryDraft.color}
+                  onChange={(event) =>
+                    setCategoryDraft((current) => ({
+                      ...current,
+                      color: event.target.value.toUpperCase(),
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>
+                  {l("العمر المقترح (سنة)", "Suggested life (years)")}
+                </span>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={categoryDraft.defaultUsefulLifeYears}
+                  onChange={(event) =>
+                    setCategoryDraft((current) => ({
+                      ...current,
+                      defaultUsefulLifeYears: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>{l("السعر التقريبي", "Estimated price")}</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={categoryDraft.defaultEstimatedPrice}
+                  onChange={(event) =>
+                    setCategoryDraft((current) => ({
+                      ...current,
+                      defaultEstimatedPrice: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>{l("العملة", "Currency")}</span>
+                <input
+                  className="ltr-input"
+                  maxLength={3}
+                  value={categoryDraft.currency}
+                  onChange={(event) =>
+                    setCategoryDraft((current) => ({
+                      ...current,
+                      currency: event.target.value.toUpperCase(),
+                    }))
+                  }
+                />
+              </label>
+              <label className="category-technical-fields">
+                <span>
+                  {l("المواصفات الفنية للبحث", "Technical lookup fields")}
+                </span>
+                <input
+                  className="ltr-input"
+                  value={categoryDraft.technicalFields}
+                  onChange={(event) =>
+                    setCategoryDraft((current) => ({
+                      ...current,
+                      technicalFields: event.target.value,
+                    }))
+                  }
+                  placeholder="capacityTons, refrigerant, ratedPower"
+                />
+              </label>
+            </div>
+            <div>
+              <button
+                type="button"
+                className="al-secondary-button"
+                disabled={busy}
+                onClick={() => setCategoryDialogOpen(false)}
+              >
+                {l("إلغاء", "Cancel")}
+              </button>
+              <button className="al-primary-button" disabled={busy}>
+                {busy
+                  ? l("جاري الحفظ…", "Saving…")
+                  : l("حفظ التصنيف", "Save category")}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+      {userDialogOpen && (
+        <div
+          className="al-dialog-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !busy)
+              setUserDialogOpen(false);
+          }}
+        >
+          <form
+            className="al-dialog admin-dialog user-account-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="user-dialog-title"
+            onSubmit={saveUser}
+          >
+            <span className="al-dialog-icon">{editingUserId ? "✎" : "+"}</span>
+            <h3 id="user-dialog-title">
+              {editingUserId
+                ? l("تعديل المستخدم وصلاحياته", "Edit user and permissions")
+                : l("إنشاء حساب مباشر", "Create direct account")}
+            </h3>
+            <p>
+              {l(
+                "يستطيع المستخدم الدخول فورًا بالبريد وكلمة المرور دون رسالة تأكيد.",
+                "The user can sign in immediately with email and password; no confirmation email is sent.",
+              )}
+            </p>
+            <div className="user-fields">
+              <label>
+                <span>{l("البريد الإلكتروني", "Email")}</span>
+                <input
+                  className="ltr-input"
+                  type="email"
+                  value={userEmail}
+                  onChange={(event) => setUserEmail(event.target.value)}
+                  placeholder="user@company.com"
+                  required
+                />
+              </label>
+              <label>
+                <span>{l("اسم المستخدم", "User name")}</span>
+                <input
+                  value={userName}
+                  onChange={(event) => setUserName(event.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                <span>{l("نوع الحساب", "Account role")}</span>
+                <select
+                  value={userRole}
+                  onChange={(event) => {
+                    const role = event.target.value as UserRole;
+                    setUserRole(role);
+                    setUserModulePermissions(defaultModulePermissions(role));
+                  }}
+                >
+                  {(Object.keys(roleLabels) as UserRole[]).map((role) => (
+                    <option key={role} value={role}>
+                      {language === "ar"
+                        ? roleLabels[role]
+                        : roleLabelsEn[role]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {!editingUserId && (
+                <>
+                  <label>
+                    <span>{l("كلمة المرور", "Password")}</span>
+                    <div className="password-input-wrap">
+                      <input
+                        className="ltr-input"
+                        type={showUserPassword ? "text" : "password"}
+                        autoComplete="new-password"
+                        minLength={10}
+                        value={userPassword}
+                        onChange={(event) =>
+                          setUserPassword(event.target.value)
+                        }
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowUserPassword((value) => !value)}
+                      >
+                        {showUserPassword
+                          ? l("إخفاء", "Hide")
+                          : l("إظهار", "Show")}
+                      </button>
+                    </div>
+                    <small>
+                      {l(
+                        "10 أحرف على الأقل مع حرف كبير وصغير ورقم ورمز.",
+                        "At least 10 characters with uppercase, lowercase, number and symbol.",
+                      )}
+                    </small>
+                  </label>
+                  <label>
+                    <span>{l("تأكيد كلمة المرور", "Confirm password")}</span>
+                    <input
+                      className="ltr-input"
+                      type={showUserPassword ? "text" : "password"}
+                      autoComplete="new-password"
+                      minLength={10}
+                      value={userPasswordConfirm}
+                      onChange={(event) =>
+                        setUserPasswordConfirm(event.target.value)
+                      }
+                      required
+                    />
+                  </label>
+                </>
+              )}
+            </div>
+            <div className="role-help">
+              <div className="selected">
+                <b>
+                  {language === "ar"
+                    ? roleLabels[userRole]
+                    : roleLabelsEn[userRole]}
+                </b>
+                <span>
+                  {language === "ar"
+                    ? roleDescriptions[userRole]
+                    : roleDescriptionsEn[userRole]}
+                </span>
+              </div>
+            </div>
+            <fieldset className="module-permissions-fieldset">
+              <legend>
+                {l(
+                  "صلاحيات التابات والإجراءات",
+                  "Module and action permissions",
+                )}
+              </legend>
+              <div className="module-permissions-table">
+                <div className="permission-head">
+                  <b>{l("التاب", "Module")}</b>
+                  {[
+                    l("عرض", "View"),
+                    l("إضافة", "Create"),
+                    l("تعديل", "Edit"),
+                    l("حذف", "Delete"),
+                    l("اعتماد", "Approve"),
+                    l("تصدير", "Export"),
+                  ].map((label) => (
+                    <span key={label}>{label}</span>
+                  ))}
+                </div>
+                {userModulePermissions.map((permission, index) => (
+                  <div className="permission-row" key={permission.module}>
+                    <b>
+                      {language === "ar"
+                        ? MODULE_LABELS[permission.module].ar
+                        : MODULE_LABELS[permission.module].en}
+                    </b>
+                    {(
+                      [
+                        "view",
+                        "create",
+                        "edit",
+                        "delete",
+                        "approve",
+                        "export",
+                      ] as ModuleAction[]
+                    ).map((action) => (
+                      <label key={action}>
+                        <input
+                          type="checkbox"
+                          checked={permission[action]}
+                          onChange={(event) =>
+                            setModulePermission(
+                              index,
+                              action,
+                              event.target.checked,
+                            )
+                          }
+                          aria-label={`${MODULE_LABELS[permission.module].en} ${action}`}
+                        />
+                        <span />
+                      </label>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>{l("المشاريع المسموح بها", "Allowed projects")}</legend>
+              <div className="project-checks">
+                {(config?.projects || []).map((item) => (
+                  <label className="check-row" key={item.id}>
+                    <input
+                      type="checkbox"
+                      checked={userProjects.includes(item.id)}
+                      onChange={(event) =>
+                        setUserProjects((current) =>
+                          event.target.checked
+                            ? [...current, item.id]
+                            : current.filter((id) => id !== item.id),
+                        )
+                      }
+                    />
+                    <span>
+                      <b>{item.name}</b>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <div className="dialog-validation" aria-live="polite">
+              {!editingUserId && userPassword && !isStrongPassword(userPassword)
+                ? l(
+                    "استخدم 10 أحرف على الأقل تشمل حرفًا كبيرًا وصغيرًا ورقمًا ورمزًا.",
+                    "Use at least 10 characters including uppercase, lowercase, a number and a symbol.",
+                  )
+                : !editingUserId &&
+                    userPasswordConfirm &&
+                    userPassword !== userPasswordConfirm
+                  ? l("كلمتا المرور غير متطابقتين.", "Passwords do not match.")
+                  : ""}
+            </div>
+            <div>
+              <button
+                type="button"
+                className="al-secondary-button"
+                disabled={busy}
+                onClick={() => setUserDialogOpen(false)}
+              >
+                {l("إلغاء", "Cancel")}
+              </button>
+              <button
+                className="al-primary-button"
+                disabled={
+                  busy ||
+                  (!editingUserId &&
+                    (!isStrongPassword(userPassword) ||
+                      userPassword !== userPasswordConfirm))
+                }
+              >
+                {busy
+                  ? l("جاري الحفظ…", "Saving…")
+                  : editingUserId
+                    ? l("حفظ التعديلات", "Save changes")
+                    : l("إنشاء الحساب", "Create account")}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+      {dialog && (
+        <div
+          className="al-dialog-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !busy) setDialog(null);
+          }}
+        >
+          <section
+            className="al-dialog admin-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="admin-dialog-title"
+          >
+            <span
+              className={`al-dialog-icon ${dialog.mode === "confirm" ? "danger" : ""}`}
+            >
+              {dialog.mode === "confirm" ? "!" : "✎"}
+            </span>
+            <h3 id="admin-dialog-title">{dialog.title}</h3>
+            <p>{dialog.description}</p>
+            {dialog.mode === "rename" && (
+              <label>
+                <span>{l("الاسم الجديد", "New name")}</span>
+                <input
+                  autoFocus
+                  value={dialog.value}
+                  onChange={(event) =>
+                    setDialog((current) =>
+                      current
+                        ? { ...current, value: event.target.value }
+                        : current,
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void submitDialog();
+                  }}
+                />
+              </label>
+            )}
+            <div>
+              <button
+                className="al-secondary-button"
+                disabled={busy}
+                onClick={() => setDialog(null)}
+              >
+                {l("إلغاء", "Cancel")}
+              </button>
+              <button
+                className={
+                  dialog.mode === "confirm"
+                    ? "al-danger-button"
+                    : "al-primary-button"
+                }
+                disabled={
+                  busy || (dialog.mode === "rename" && !dialog.value.trim())
+                }
+                onClick={() => void submitDialog()}
+              >
+                {busy
+                  ? l("جاري الحفظ…", "Saving…")
+                  : dialog.mode === "confirm"
+                    ? l("تأكيد العملية", "Confirm")
+                    : l("حفظ الاسم", "Save name")}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+      {passwordTarget && (
+        <div
+          className="al-dialog-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !busy)
+              setPasswordTarget(null);
+          }}
+        >
+          <form
+            className="al-dialog admin-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reset-password-title"
+            onSubmit={saveReplacementPassword}
+          >
+            <span className="al-dialog-icon">🔐</span>
+            <h3 id="reset-password-title">
+              {l("تغيير كلمة مرور", "Change password for")}{" "}
+              {passwordTarget.name || passwordTarget.email}
+            </h3>
+            <p>
+              {l(
+                "اكتب كلمة المرور الجديدة التي سيستخدمها للدخول إلى النظام.",
+                "Enter the new password this user will use to sign in.",
+              )}
+            </p>
+            <label>
+              <span>{l("كلمة المرور الجديدة", "New password")}</span>
+              <input
+                className="ltr-input"
+                type="password"
+                autoComplete="new-password"
+                minLength={10}
+                value={replacementPassword}
+                onChange={(event) => setReplacementPassword(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              <span>{l("تأكيد كلمة المرور", "Confirm password")}</span>
+              <input
+                className="ltr-input"
+                type="password"
+                autoComplete="new-password"
+                minLength={10}
+                value={replacementPasswordConfirm}
+                onChange={(event) =>
+                  setReplacementPasswordConfirm(event.target.value)
+                }
+                required
+              />
+            </label>
+            <small>
+              {l(
+                "يجب أن تشمل حرفًا كبيرًا وصغيرًا ورقمًا ورمزًا.",
+                "Must include uppercase, lowercase, a number and a symbol.",
+              )}
+            </small>
+            <div className="dialog-validation" aria-live="polite">
+              {replacementPassword && !isStrongPassword(replacementPassword)
+                ? l(
+                    "كلمة المرور لا تحقق جميع المتطلبات.",
+                    "The password does not meet every requirement.",
+                  )
+                : replacementPasswordConfirm &&
+                    replacementPassword !== replacementPasswordConfirm
+                  ? l("كلمتا المرور غير متطابقتين.", "Passwords do not match.")
+                  : ""}
+            </div>
+            <div>
+              <button
+                type="button"
+                className="al-secondary-button"
+                disabled={busy}
+                onClick={() => setPasswordTarget(null)}
+              >
+                {l("إلغاء", "Cancel")}
+              </button>
+              <button
+                className="al-primary-button"
+                disabled={
+                  busy ||
+                  !isStrongPassword(replacementPassword) ||
+                  replacementPassword !== replacementPasswordConfirm
+                }
+              >
+                {busy
+                  ? l("جاري الحفظ…", "Saving…")
+                  : l("حفظ كلمة المرور", "Save password")}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </main>
+  );
 }

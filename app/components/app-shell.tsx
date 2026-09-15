@@ -37,8 +37,14 @@ const pageTitles: Record<string, { ar: string; en: string }> = {
   "/admin": { ar: "إدارة النظام", en: "Administration" },
 };
 
-const SERVICE_WORKER_VERSION = "21.0.1";
-const roleLabels: Record<UserRole, string> = { admin: "Administrator", project_manager: "Project Manager", reviewer: "Reviewer", surveyor: "Surveyor", viewer: "Viewer" };
+const SERVICE_WORKER_VERSION = "22.2.1";
+const roleLabels: Record<UserRole, { ar: string; en: string }> = {
+  admin: { ar: "مسؤول", en: "Administrator" },
+  project_manager: { ar: "مدير مشروع", en: "Project Manager" },
+  reviewer: { ar: "مراجع", en: "Reviewer" },
+  surveyor: { ar: "ماسح ميداني", en: "Surveyor" },
+  viewer: { ar: "مشاهد", en: "Viewer" },
+};
 
 function Icon({ name }: { name: IconName }) {
   const common = { width: 20, height: 20, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
@@ -312,7 +318,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
         <div className="al-sidebar-foot">
-          <div className="al-user-summary"><span>{initials || "AL"}</span><div><strong>{me?.name || "AssetLens User"}</strong><small>{me ? roleLabels[me.role] : "User"}</small></div></div>
+          <div className="al-user-summary"><span>{initials || "AL"}</span><div><strong>{me?.name || "AssetLens User"}</strong><small>{me ? roleLabels[me.role][language] : language === "ar" ? "مستخدم" : "User"}</small></div></div>
           <button className="al-collapse" onClick={toggleCollapsed} aria-label={collapsed ? (language === "ar" ? "توسيع القائمة" : "Expand navigation") : (language === "ar" ? "تصغير القائمة" : "Collapse navigation")}><Icon name="chevron" /><span>{collapsed ? (language === "ar" ? "توسيع" : "Expand") : (language === "ar" ? "تصغير القائمة" : "Collapse menu")}</span></button>
         </div>
       </aside>

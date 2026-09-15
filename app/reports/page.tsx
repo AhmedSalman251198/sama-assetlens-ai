@@ -32,6 +32,7 @@ import {
 } from "../lib/asset-operational-status";
 import { canUseModule, ModulePermission } from "../lib/module-permissions";
 import { languageText, useUiLanguage } from "../lib/use-ui-language";
+import { PaginationJump } from "../components/pagination-jump";
 type CustomValue = {
   key: string;
   labelAr: string;
@@ -99,6 +100,8 @@ type RecordRow = {
   canEdit: boolean;
   canTransfer: boolean;
   canDelete: boolean;
+  relationshipCount: number;
+  preliminaryRelationshipCount: number;
 };
 type ReportPayload = {
   currentUser: {
@@ -111,7 +114,21 @@ type ReportPayload = {
   }>;
   categories: Array<{ id: string; labelAr: string; labelEn: string }>;
   records: RecordRow[];
+  total: number | null;
+  hasNext: boolean;
+  page: number;
+  pageSize: number;
+  counts: {
+    total: number;
+    completed: number;
+    review: number;
+    active: number;
+    failed: number;
+  };
   error?: string;
+};
+type ReportSummaryPayload = {
+  counts: ReportPayload["counts"];
 };
 type QrSnapshotResponse = {
   source: AssetQrSource;
@@ -176,6 +193,7 @@ const STATUS_LABELS_EN: Record<string, string> = {
   review: "Needs review",
   failed: "Failed",
 };
+const REPORT_PAGE_SIZE = 100;
 function normalizeHeader(value: string) {
   return value
     .toLowerCase()
@@ -345,6 +363,13 @@ function escapeHtml(value: string) {
       })[character] || character,
   );
 }
+function filterRowsByQuality(rows: RecordRow[], quality: string) {
+  if (quality === "duplicates") return rows.filter((row) => row.isDuplicate);
+  if (quality === "missing")
+    return rows.filter((row) => row.missingFields.length > 0);
+  if (quality === "low") return rows.filter((row) => row.confidence < 0.75);
+  return rows;
+}
 export default function ReportsPage() {
   const language = useUiLanguage();
   const l = (ar: string, en: string) => languageText(language, ar, en);
@@ -365,7 +390,13 @@ export default function ReportsPage() {
   const [quality, setQuality] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [visibleLimit, setVisibleLimit] = useState(150);
+  const [page, setPage] = useState(1);
+  const [filtersReady, setFiltersReady] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [summaryCounts, setSummaryCounts] = useState<
+    ReportPayload["counts"] | null
+  >(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importFile, setImportFile] = useState("");
   const [importFileData, setImportFileData] = useState<File | null>(null);
@@ -461,107 +492,136 @@ export default function ReportsPage() {
   }
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const assetQuery = params.get("asset");
-    const criticalityQuery = params.get("criticality");
+    const value = (key: string, max = 160) =>
+      (params.get(key) || "").trim().slice(0, max);
+    const assetQuery = value("asset", 100);
+    const searchQuery = value("search", 100);
+    const criticalityQuery = value("criticality", 1);
+    const conditionQuery = value("condition", 1);
     const timer = window.setTimeout(() => {
-      if (assetQuery) setSearch(assetQuery);
+      if (assetQuery || searchQuery) setSearch(assetQuery || searchQuery);
+      setProject(value("project", 80));
+      setBuilding(value("building"));
+      setAssetType(value("assetType"));
+      setStatus(value("status", 20));
+      setCategory(value("category", 80));
+      setOperationalStatus(value("operationalStatus", 40));
+      setSurveyor(value("surveyor", 200));
+      setQuality(value("quality", 20));
+      setDateFrom(value("dateFrom", 10));
+      setDateTo(value("dateTo", 10));
       if (criticalityQuery && /^[1-5]$/.test(criticalityQuery))
         setCriticality(criticalityQuery);
+      if (conditionQuery && /^[1-5]$/.test(conditionQuery))
+        setCondition(conditionQuery);
+      setFiltersReady(true);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
+  const deferredSearch = useDeferredValue(search);
+  const reportRequestUrl = useMemo(() => {
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(REPORT_PAGE_SIZE),
+      includeCounts: "0",
+    });
+    const values: Array<[string, string]> = [
+      ["search", deferredSearch.trim()],
+      ["project", project],
+      ["building", building],
+      ["assetType", assetType],
+      ["status", status],
+      ["condition", condition],
+      ["criticality", criticality],
+      ["category", category],
+      ["operationalStatus", operationalStatus],
+      ["surveyor", surveyor],
+      ["quality", quality],
+      ["dateFrom", dateFrom],
+      ["dateTo", dateTo],
+    ];
+    for (const [key, value] of values) if (value) params.set(key, value);
+    return `/api/reports?${params.toString()}`;
+  }, [
+    page,
+    deferredSearch,
+    project,
+    building,
+    assetType,
+    status,
+    condition,
+    criticality,
+    category,
+    operationalStatus,
+    surveyor,
+    quality,
+    dateFrom,
+    dateTo,
+  ]);
+  const reportSummaryUrl = useMemo(() => {
+    const params = new URL(reportRequestUrl, "http://assetlens.local").searchParams;
+    params.delete("page");
+    params.delete("pageSize");
+    params.delete("includeCounts");
+    params.delete("status");
+    params.set("summary", "1");
+    return `/api/reports?${params.toString()}`;
+  }, [reportRequestUrl]);
   useEffect(() => {
+    if (!filtersReady) return;
+    let cancelled = false;
     void (async () => {
+      setLoading(true);
+      setError("");
       try {
-        const payload = await apiGet<ReportPayload>("/api/reports", {
-          ttlMs: 30000,
+        const payload = await apiGet<ReportPayload>(reportRequestUrl, {
+          ttlMs: 20000,
+          timeoutMs: 60_000,
         });
-        setData(payload);
+        if (!cancelled) setData(payload);
       } catch (err) {
+        if (cancelled) return;
         if (err instanceof ApiClientError && err.status === 401) {
           window.location.replace("/login");
           return;
         }
         setError(err instanceof Error ? err.message : "تعذر تحميل التقارير.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [filtersReady, reloadKey, reportRequestUrl]);
+  useEffect(() => {
+    if (!filtersReady) return;
+    let cancelled = false;
+    void apiGet<ReportSummaryPayload>(reportSummaryUrl, {
+      ttlMs: 30000,
+      timeoutMs: 60_000,
+    })
+      .then((payload) => {
+        if (!cancelled) setSummaryCounts(payload.counts);
+      })
+      .catch(() => {
+        /* The register remains usable even if its optional summary is delayed. */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filtersReady, reloadKey, reportSummaryUrl]);
   const records = useMemo(() => data?.records || [], [data]);
-  const deferredSearch = useDeferredValue(search);
-  const normalizedSearch = deferredSearch.trim().toLowerCase();
   const filtered = useMemo(
-    () =>
-      records.filter((row) => {
-        const haystack = [
-          row.id,
-          row.assetNo,
-          row.project,
-          row.building,
-          row.floor,
-          row.zone,
-          row.office,
-          ...row.additionalLocations.map((item) => item.value),
-          row.assetType,
-          row.categoryAr,
-          row.categoryEn,
-          row.manufacturer,
-          row.model,
-          row.serial,
-          row.barcode,
-          row.surveyorEmail,
-          row.summary,
-          row.conditionJustification,
-          assetConditionLabel(row.conditionRating),
-          assetCriticalityLabel(row.criticalityRating),
-          assetOperationalStatusLabel(row.operationalStatus),
-          ...row.customValues.map((item) => item.value),
-        ]
-          .join(" ")
-          .toLowerCase();
-        const created = row.createdAt.slice(0, 10);
-        return (
-          (!normalizedSearch || haystack.includes(normalizedSearch)) &&
-          (!project || row.projectId === project) &&
-          (!building || row.building === building) &&
-          (!assetType || row.assetType === assetType) &&
-          (!category || row.categoryId === category) &&
-          (!operationalStatus || row.operationalStatus === operationalStatus) &&
-          (!status || row.status === status) &&
-          (!condition || row.conditionRating === Number(condition)) &&
-          (!criticality || row.criticalityRating === Number(criticality)) &&
-          (!surveyor || row.surveyorEmail === surveyor) &&
-          (!dateFrom || created >= dateFrom) &&
-          (!dateTo || created <= dateTo) &&
-          (!quality ||
-            (quality === "duplicates"
-              ? row.isDuplicate
-              : quality === "missing"
-                ? row.missingFields.length > 0
-                : quality === "low"
-                  ? row.confidence < 0.75
-                  : true))
-        );
-      }),
-    [
-      records,
-      normalizedSearch,
-      project,
-      building,
-      assetType,
-      category,
-      operationalStatus,
-      status,
-      condition,
-      criticality,
-      surveyor,
-      dateFrom,
-      dateTo,
-      quality,
-    ],
+    () => filterRowsByQuality(records, quality),
+    [records, quality],
   );
-  const visibleRows = useMemo(
-    () => filtered.slice(0, visibleLimit),
-    [filtered, visibleLimit],
+  const visibleRows = filtered;
+  const matchingTotal = summaryCounts?.total ?? data?.total ?? 0;
+  const reportPageCount = Math.max(
+    1,
+    Math.ceil(matchingTotal / REPORT_PAGE_SIZE),
+    data?.hasNext ? page + 1 : page,
   );
   const filterOptions = useMemo(
     () => ({
@@ -571,47 +631,41 @@ export default function ReportsPage() {
       assetTypes: Array.from(
         new Set(records.map((row) => row.assetType).filter(Boolean)),
       ).sort(),
-      categories: Array.from(
-        new Map(
-          records
-            .filter((row) => row.categoryId)
-            .map((row) => [
-              row.categoryId,
-              { id: row.categoryId, label: row.categoryAr || row.categoryEn },
-            ]),
-        ).values(),
-      ).sort((a, b) => a.label.localeCompare(b.label, "ar")),
+      categories: (data?.categories || [])
+        .map((item) => ({
+          id: item.id,
+          label:
+            language === "ar"
+              ? item.labelAr || item.labelEn
+              : item.labelEn || item.labelAr,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label, language)),
       surveyors: Array.from(
         new Set(records.map((row) => row.surveyorEmail).filter(Boolean)),
       ).sort(),
     }),
-    [records],
+    [data?.categories, language, records],
   );
   const counts = useMemo(
-    () =>
-      records.reduce(
+    () => {
+      const pageQuality = records.reduce(
         (summary, row) => {
-          summary.total += 1;
-          if (row.status === "completed") summary.completed += 1;
-          else if (row.status === "review") summary.review += 1;
-          else if (row.status === "failed") summary.failed += 1;
-          else if (row.status === "queued" || row.status === "processing")
-            summary.active += 1;
           if (row.isDuplicate) summary.duplicate += 1;
           if (row.missingFields.length) summary.missing += 1;
           return summary;
         },
-        {
-          total: 0,
-          completed: 0,
-          review: 0,
-          active: 0,
-          failed: 0,
-          duplicate: 0,
-          missing: 0,
-        },
-      ),
-    [records],
+        { duplicate: 0, missing: 0 },
+      );
+      return {
+        total: summaryCounts?.total ?? null,
+        completed: summaryCounts?.completed ?? null,
+        review: summaryCounts?.review ?? null,
+        active: summaryCounts?.active ?? null,
+        failed: summaryCounts?.failed ?? null,
+        ...pageQuality,
+      };
+    },
+    [records, summaryCounts],
   );
   const importRows = useMemo(() => {
     const parsed = rawImportRows.map((row) =>
@@ -723,6 +777,60 @@ export default function ReportsPage() {
       `AssetLens_${suffix}_${new Date().toISOString().slice(0, 10)}.xlsx`,
       [{ name: "Assets", rows: sheetRows }],
     );
+  }
+  async function exportAllMatchingRows(
+    requestedQuality: string,
+    suffix: string,
+  ) {
+    if (!data || busy) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const params = new URL(reportRequestUrl, window.location.origin)
+        .searchParams;
+      params.set("pageSize", "500");
+      params.set("includeCounts", "0");
+      if (requestedQuality) params.set("quality", requestedQuality);
+      else params.delete("quality");
+      const rows: RecordRow[] = [];
+      let exportPage = 1;
+      let hasNext = true;
+      let scanned = 0;
+      do {
+        params.set("page", String(exportPage));
+        const payload = await apiGet<ReportPayload>(
+          `/api/reports?${params.toString()}`,
+          { force: true, ttlMs: 0, timeoutMs: 120_000 },
+        );
+        scanned += payload.records.length;
+        if (scanned > 100_000 || (payload.hasNext && scanned === 100_000))
+          throw new Error(
+            l(
+              "يتجاوز التصدير الحد الآمن البالغ 100,000 أصل. ضيّق الفلاتر ثم أعد المحاولة.",
+              "The export exceeds the safe 100,000-asset limit. Narrow the filters and retry.",
+            ),
+          );
+        rows.push(...filterRowsByQuality(payload.records, requestedQuality));
+        hasNext = payload.hasNext;
+        exportPage += 1;
+      } while (hasNext);
+      await exportRows(rows, suffix);
+      setNotice(
+        l(
+          `تم تجهيز ملف Excel من ${rows.length.toLocaleString("ar-AE")} أصل مطابق.`,
+          `Excel prepared from ${rows.length.toLocaleString("en-US")} matching assets.`,
+        ),
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : l("تعذر تجهيز ملف Excel.", "Could not prepare the Excel file."),
+      );
+    } finally {
+      setBusy(false);
+    }
   }
   async function inspectImportFile(
     file: File,
@@ -921,16 +1029,8 @@ export default function ReportsPage() {
       );
       setImportProgress(90);
       invalidateApiCache();
-      try {
-        setData(
-          await apiGet<ReportPayload>("/api/reports", {
-            force: true,
-            timeoutMs: 120_000,
-          }),
-        );
-      } catch {
-        /* Imported rows are durable; refresh can be retried without duplicating them. */
-      }
+      setPage(1);
+      setReloadKey((current) => current + 1);
       setRawImportRows([]);
       setImportHeaders([]);
       setImportSheets([]);
@@ -1028,7 +1128,8 @@ export default function ReportsPage() {
   }
   function setReportFilter(setter: (value: string) => void, value: string) {
     setter(value);
-    setVisibleLimit(150);
+    setPage(1);
+    setSummaryCounts(null);
   }
   function clearReportFilters() {
     setSearch("");
@@ -1044,10 +1145,12 @@ export default function ReportsPage() {
     setQuality("");
     setDateFrom("");
     setDateTo("");
-    setVisibleLimit(150);
+    setPage(1);
+    setSummaryCounts(null);
   }
   function applyStatFilter(key: string) {
-    setVisibleLimit(150);
+    setPage(1);
+    setSummaryCounts(null);
     if (key === "duplicate") {
       setQuality("duplicates");
       return;
@@ -1102,6 +1205,7 @@ export default function ReportsPage() {
       if (detail?.id === deleteTarget.id) setDetail(null);
       setDeleteTarget(null);
       invalidateApiCache();
+      setReloadKey((current) => current + 1);
       setNotice("تم حذف الأصل من السجل.");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "تعذر حذف الأصل.");
@@ -1113,7 +1217,7 @@ export default function ReportsPage() {
     const ids = Array.from(selected);
     if (
       !ids.length ||
-      ids.length > 50 ||
+      ids.length > 500 ||
       bulkDeleteConfirm !== String(ids.length)
     )
       return;
@@ -1159,6 +1263,7 @@ export default function ReportsPage() {
       setBulkDeleteOpen(false);
       setBulkDeleteConfirm("");
       invalidateApiCache();
+      setReloadKey((current) => current + 1);
       setNotice(
         `${l("تم حذف", "Deleted")} ${payload.count || ids.length} ${l("أصلًا بعد التحقق من الصلاحيات.", "assets after permission checks.")} ${payload.cleanupWarning || ""}`.trim(),
       );
@@ -1179,34 +1284,38 @@ export default function ReportsPage() {
   const statItems = [
     {
       key: "total",
-      value: counts.total,
+      value: counts.total ?? "—",
       label: l("إجمالي الأصول", "Total assets"),
     },
     {
       key: "completed",
-      value: counts.completed,
+      value: counts.completed ?? "—",
       label: l("معتمدة", "Approved"),
     },
     {
       key: "review",
-      value: counts.review,
+      value: counts.review ?? "—",
       label: l("تحتاج مراجعة", "Needs review"),
     },
     {
       key: "active",
-      value: counts.active,
+      value: counts.active ?? "—",
       label: l("قيد التحليل", "In analysis"),
     },
-    { key: "failed", value: counts.failed, label: l("فشلت", "Failed") },
+    {
+      key: "failed",
+      value: counts.failed ?? "—",
+      label: l("فشلت", "Failed"),
+    },
     {
       key: "duplicate",
       value: counts.duplicate,
-      label: l("سيريال مكرر", "Duplicate serial"),
+      label: l("سيريال مكرر في الصفحة", "Duplicate serial on page"),
     },
     {
       key: "missing",
       value: counts.missing,
-      label: l("بيانات ناقصة", "Missing data"),
+      label: l("بيانات ناقصة في الصفحة", "Missing data on page"),
     },
   ];
   return (
@@ -1228,9 +1337,26 @@ export default function ReportsPage() {
       </header>
       {error && <div className="reports-alert error">{error}</div>}
       {notice && <div className="reports-alert success">{notice}</div>}
-      {!data ? (
+      {loading && data && (
+        <div className="reports-loading" role="status">
+          {l("جاري تحديث نتائج الصفحة…", "Updating page results…")}
+        </div>
+      )}
+      {!data && loading ? (
         <div className="reports-loading">
           {l("جاري تحميل سجل الأصول…", "Loading asset register…")}
+        </div>
+      ) : !data ? (
+        <div className="reports-loading report-load-retry">
+          <span>
+            {l(
+              "تعذر تحميل سجل الأصول. يمكنك المحاولة مرة أخرى دون إعادة تحميل الصفحة.",
+              "The asset register could not be loaded. Retry without refreshing the page.",
+            )}
+          </span>
+          <button onClick={() => setReloadKey((current) => current + 1)}>
+            {l("إعادة المحاولة", "Retry")}
+          </button>
         </div>
       ) : (
         <>
@@ -1295,31 +1421,35 @@ export default function ReportsPage() {
               </label>
               <label>
                 {l("المبنى / الموقع", "Building / site")}
-                <select
+                <input
+                  list="report-building-options"
                   value={building}
                   onChange={(event) =>
                     setReportFilter(setBuilding, event.target.value)
                   }
-                >
-                  <option value="">{l("كل المواقع", "All locations")}</option>
+                  placeholder={l("كل المواقع", "All locations")}
+                />
+                <datalist id="report-building-options">
                   {filterOptions.buildings.map((item) => (
-                    <option key={item}>{item}</option>
+                    <option key={item} value={item} />
                   ))}
-                </select>
+                </datalist>
               </label>
               <label>
                 {l("نوع الأصل", "Asset type")}
-                <select
+                <input
+                  list="report-asset-type-options"
                   value={assetType}
                   onChange={(event) =>
                     setReportFilter(setAssetType, event.target.value)
                   }
-                >
-                  <option value="">{l("كل الأنواع", "All types")}</option>
+                  placeholder={l("كل الأنواع", "All types")}
+                />
+                <datalist id="report-asset-type-options">
                   {filterOptions.assetTypes.map((item) => (
-                    <option key={item}>{item}</option>
+                    <option key={item} value={item} />
                   ))}
-                </select>
+                </datalist>
               </label>
               <label>
                 {l("تصنيف الأصل", "Asset category")}
@@ -1411,17 +1541,19 @@ export default function ReportsPage() {
               </label>
               <label>
                 {l("المستخدم", "User")}
-                <select
+                <input
+                  list="report-surveyor-options"
                   value={surveyor}
                   onChange={(event) =>
                     setReportFilter(setSurveyor, event.target.value)
                   }
-                >
-                  <option value="">{l("كل المستخدمين", "All users")}</option>
+                  placeholder={l("كل المستخدمين", "All users")}
+                />
+                <datalist id="report-surveyor-options">
                   {filterOptions.surveyors.map((item) => (
-                    <option key={item}>{item}</option>
+                    <option key={item} value={item} />
                   ))}
-                </select>
+                </datalist>
               </label>
               <label>
                 {l("جودة البيانات", "Data quality")}
@@ -1468,7 +1600,11 @@ export default function ReportsPage() {
             </div>
             <div className="report-actions">
               <strong>
-                {filtered.length} {l("نتيجة مطابقة", "matching results")}
+                {quality === "duplicates" || quality === "missing"
+                  ? `${filtered.length} ${l("نتيجة في الصفحة الحالية", "results on this page")}`
+                  : summaryCounts !== null
+                    ? `${summaryCounts.total} ${l("نتيجة مطابقة", "matching results")}`
+                    : `${visibleRows.length} ${l("سجلًا في الصفحة الحالية", "records on this page")}${data.hasNext ? ` · ${l("توجد نتائج إضافية", "more results available")}` : ""}`}
               </strong>
               {canUseModule(
                 data.currentUser.modulePermissions,
@@ -1477,17 +1613,43 @@ export default function ReportsPage() {
               ) && (
                 <>
                   <button
-                    onClick={() => void exportRows(filtered, "Filtered_Report")}
+                    disabled={busy || loading}
+                    onClick={() =>
+                      void exportAllMatchingRows(quality, "Filtered_Report")
+                    }
                   >
                     {l("تصدير النتائج إلى Excel", "Export results to Excel")}
                   </button>
+                  {selected.size > 0 &&
+                    (canUseModule(
+                      data.currentUser.modulePermissions,
+                      "reports",
+                      "delete",
+                    ) ||
+                      canUseModule(
+                        data.currentUser.modulePermissions,
+                        "capture",
+                        "delete",
+                      )) && (
+                    <button
+                      type="button"
+                      className="bulk-delete-action"
+                      disabled={busy || selected.size > 500}
+                      onClick={() => {
+                        setBulkDeleteConfirm("");
+                        setBulkDeleteOpen(true);
+                      }}
+                    >
+                      {selected.size > 500
+                        ? l("الحد الآمن 500 أصل", "Safe maximum 500 assets")
+                        : `${l("حذف المحدد", "Delete selected")} (${selected.size})`}
+                    </button>
+                  )}
                   <button
                     className="missing-export"
+                    disabled={busy || loading}
                     onClick={() =>
-                      void exportRows(
-                        filtered.filter((row) => row.missingFields.length),
-                        "Missing_Data",
-                      )
+                      void exportAllMatchingRows("missing", "Missing_Data")
                     }
                   >
                     {l("تقرير البيانات الناقصة", "Missing-data report")}
@@ -1561,7 +1723,7 @@ export default function ReportsPage() {
                     })
                   }
                 />{" "}
-                {l("تحديد النتائج", "Select results")}
+                {l("تحديد الصفحة الحالية", "Select current page")}
               </label>
             </div>
             <div className="advanced-table-wrap">
@@ -1612,6 +1774,14 @@ export default function ReportsPage() {
                           {Math.round(row.confidence * 100)}%{" "}
                           {l("ثقة", "confidence")}
                         </small>
+                        {row.relationshipCount > 0 && (
+                          <small className="register-relationship-badge">
+                            ↔ {row.relationshipCount}{" "}
+                            {l("علاقة أصل", "asset link")}
+                            {row.preliminaryRelationshipCount > 0 &&
+                              ` · ${l("تحتاج مراجعة", "review required")}`}
+                          </small>
+                        )}
                       </td>
                       <td>
                         <strong>{row.project}</strong>
@@ -1757,16 +1927,39 @@ export default function ReportsPage() {
                 </p>
               )}
             </div>
-            {visibleRows.length < filtered.length && (
-              <button
-                className="load-more-records"
-                onClick={() => setVisibleLimit((limit) => limit + 150)}
+            {(page > 1 || data.hasNext || reportPageCount > 1) && (
+              <nav
+                className="report-pagination"
+                aria-label={l("صفحات سجل الأصول", "Asset register pages")}
               >
-                {l(
-                  `عرض 150 سجل إضافي من ${filtered.length}`,
-                  `Show 150 more of ${filtered.length}`,
-                )}
-              </button>
+                <button
+                  disabled={page <= 1 || loading}
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                >
+                  {l("الصفحة السابقة", "Previous page")}
+                </button>
+                <span>
+                  {l("صفحة", "Page")} {data.page}
+                  {" · "}
+                  {visibleRows.length.toLocaleString(
+                    language === "ar" ? "ar-AE" : "en-US",
+                  )}{" "}
+                  {l("أصل في الصفحة", "assets on this page")}
+                </span>
+                <PaginationJump
+                  page={page}
+                  pageCount={reportPageCount}
+                  busy={loading}
+                  language={language}
+                  onPageChange={setPage}
+                />
+                <button
+                  disabled={!data.hasNext || loading}
+                  onClick={() => setPage((current) => current + 1)}
+                >
+                  {l("الصفحة التالية", "Next page")}
+                </button>
+              </nav>
             )}
           </section>
           {data.currentUser.role === "admin" && (
@@ -2160,32 +2353,6 @@ export default function ReportsPage() {
                 )}
               </button>
             </section>
-          )}
-          {selected.size > 0 && (
-            <div className="bulk-delete-bar">
-              <span>
-                {selected.size} {l("أصل محدد", "assets selected")}
-              </span>
-              <button
-                type="button"
-                disabled={
-                  busy ||
-                  selected.size > 50 ||
-                  !Array.from(selected).every(
-                    (id) =>
-                      data.records.find((row) => row.id === id)?.canDelete,
-                  )
-                }
-                onClick={() => {
-                  setBulkDeleteConfirm("");
-                  setBulkDeleteOpen(true);
-                }}
-              >
-                {selected.size > 50
-                  ? l("الحد 50 أصلًا", "Maximum 50 assets")
-                  : l("حذف المحدد", "Delete selected")}
-              </button>
-            </div>
           )}
           {bulkDeleteOpen && (
             <div

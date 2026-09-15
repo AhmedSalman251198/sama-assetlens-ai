@@ -1,31 +1,129 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getAccessToken } from "../../lib/supabase-auth";
 import { ASSET_CONDITION_LEVELS } from "../../lib/asset-condition";
 import { ASSET_CRITICALITY_LEVELS } from "../../lib/asset-criticality";
 import { assetOperationalStatusLabel } from "../../lib/asset-operational-status";
-import { readUiLanguage, UI_LANGUAGE_EVENT, UiLanguage } from "../../lib/ui-preferences";
+import {
+  readUiLanguage,
+  UI_LANGUAGE_EVENT,
+  UiLanguage,
+} from "../../lib/ui-preferences";
 
 type Report = {
-  generatedAt: string; language: UiLanguage; narrative: string; narrativeMode: "ai" | "register_summary"; userNotes: string | null;
-  facts: { project: string; assetCount: number; weightedRiskPercent: number | null; criticalPoorCount: number; reviewCount: number; missingCondition: number; missingCriticality: number };
-  condition: Array<{ rating: number; count: number }>; criticality: Array<{ rating: number; count: number }>;
-  operational: Array<{ status: string; count: number }>; categories: Array<{ name: string; count: number }>;
+  generatedAt: string;
+  language: UiLanguage;
+  branding: {
+    projectId: string;
+    projectName: string;
+    clientLogoAvailable: boolean;
+  };
+  narrative: string;
+  narrativeMode: "ai" | "register_summary";
+  userNotes: string | null;
+  noteConsideration: string;
+  facts: {
+    project: string;
+    assetCount: number;
+    weightedRiskPercent: number | null;
+    criticalPoorCount: number;
+    reviewCount: number;
+    missingCondition: number;
+    missingCriticality: number;
+  };
+  condition: Array<{ rating: number; count: number }>;
+  criticality: Array<{ rating: number; count: number }>;
+  operational: Array<{ status: string; count: number }>;
+  categories: Array<{ name: string; count: number }>;
   priorityAssets: ActionAsset[];
   locations: Array<{ name: string; count: number; highRisk: number }>;
-  riskMatrix: Array<{ conditionRating: number; cells: Array<{ criticalityRating: number; count: number; score: number }> }>;
+  riskMatrix: Array<{
+    conditionRating: number;
+    cells: Array<{ criticalityRating: number; count: number; score: number }>;
+  }>;
   lifeBands: Array<{ key: string; count: number }>;
   dataQuality: Record<string, number>;
-  confidenceMap: { scoredAssets: number; unscoredAssets: number; coveragePercent: number; bands: Array<{ key: string; count: number }>; byBuilding: Array<{ name: string; count: number; average: number }>; reviewAssets: Array<{ id: string; assetNo: string; assetType: string; building: string; confidence: number }>; lowConfidenceFields: Array<{ assetId: string; assetNo: string; field: string; confidence: number }> };
-  actionPlan: { immediate: ActionAsset[]; nearTerm: ActionAsset[]; planned: ActionAsset[] };
-  portfolio: { value: number | null; currency: string; mixedCurrencies: boolean; coveragePercent: number; immediateBudget: number | null; nearTermBudget: number | null }; period: { from: string | null; to: string | null };
-  sustainability: { candidateAssets: number; assetsWithRatedPower: number; coveragePercent: number; annualEnergySavingKwh: number | null; annualCostSavingAed: number | null; fiveYearCostSavingAed: number | null; simplePaybackYears: number | null; limitation: string };
+  confidenceMap: {
+    scoredAssets: number;
+    unscoredAssets: number;
+    coveragePercent: number;
+    bands: Array<{ key: string; count: number }>;
+    byBuilding: Array<{ name: string; count: number; average: number }>;
+    reviewAssets: Array<{
+      id: string;
+      assetNo: string;
+      assetType: string;
+      building: string;
+      confidence: number;
+    }>;
+    lowConfidenceFields: Array<{
+      assetId: string;
+      assetNo: string;
+      field: string;
+      confidence: number;
+    }>;
+  };
+  actionPlan: {
+    immediate: ActionAsset[];
+    nearTerm: ActionAsset[];
+    planned: ActionAsset[];
+  };
+  replacementStudy: {
+    readinessPercent: number;
+    coverage: { condition: number; criticality: number; cost: number; remainingLife: number };
+    classifications: { replacementAssessment: number; repairAssessment: number; lifecyclePlanning: number; monitor: number; completeData: number };
+    scenarios: Array<{ key: string; assetCount: number; documentedCost: number | null; description: string }>;
+    roadmap: Array<{ years: number; candidateAssets: number }>;
+    assumptions: string[];
+  };
+  recommendations: Array<{ priority: string; title: string; action: string; evidence: string; confidence: number }>;
+  portfolio: {
+    value: number | null;
+    currency: string;
+    mixedCurrencies: boolean;
+    coveragePercent: number;
+    immediateBudget: number | null;
+    nearTermBudget: number | null;
+  };
+  period: { from: string | null; to: string | null };
+  sustainability: {
+    candidateAssets: number;
+    assetsWithRatedPower: number;
+    coveragePercent: number;
+    annualEnergySavingKwh: number | null;
+    annualCostSavingAed: number | null;
+    fiveYearCostSavingAed: number | null;
+    simplePaybackYears: number | null;
+    limitation: string;
+  };
   standards: Array<{ code: string; title: string; application: string }>;
-  methodology: { conditionScale: string; criticalityScale: string; riskFormula: string; scope: string; assurance: string };
+  methodology: {
+    conditionScale: string;
+    criticalityScale: string;
+    riskFormula: string;
+    scope: string;
+    assurance: string;
+  };
 };
-type ActionAsset = { id: string; assetNo: string; assetType: string; building: string; location: string; conditionRating: number | null; conditionJustification: string; criticalityRating: number | null; operationalStatus: string; remainingLifeYears: number | null; replacementCost: number | null; manufacturer: string; model: string; serial: string };
+type ActionAsset = {
+  id: string;
+  assetNo: string;
+  assetType: string;
+  building: string;
+  location: string;
+  conditionRating: number | null;
+  conditionJustification: string;
+  criticalityRating: number | null;
+  operationalStatus: string;
+  remainingLifeYears: number | null;
+  replacementCost: number | null;
+  manufacturer: string;
+  model: string;
+  serial: string;
+};
 
 export default function AiProjectReportPage() {
   const [language, setLanguage] = useState<UiLanguage>("ar");
@@ -33,50 +131,782 @@ export default function AiProjectReportPage() {
   const [error, setError] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
+  const [clientLogoUrl, setClientLogoUrl] = useState("");
   useEffect(() => {
     const currentLanguage = readUiLanguage();
     const timer = window.setTimeout(() => setLanguage(currentLanguage), 0);
-    const listener = (event: Event) => setLanguage((event as CustomEvent<UiLanguage>).detail || readUiLanguage());
+    const listener = (event: Event) =>
+      setLanguage(
+        (event as CustomEvent<UiLanguage>).detail || readUiLanguage(),
+      );
     window.addEventListener(UI_LANGUAGE_EVENT, listener);
-    return () => { window.clearTimeout(timer); window.removeEventListener(UI_LANGUAGE_EVENT, listener); };
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener(UI_LANGUAGE_EVENT, listener);
+    };
   }, []);
+  useEffect(
+    () => () => {
+      if (clientLogoUrl) URL.revokeObjectURL(clientLogoUrl);
+    },
+    [clientLogoUrl],
+  );
   async function generateReport() {
-      setBusy(true); setError("");
-      const params = new URLSearchParams(window.location.search);
-      try {
-        const token = await getAccessToken(); if (!token) { window.location.replace("/login"); return; }
-        const response = await fetch("/api/reports/ai", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ projectId: params.get("project") || "", dateFrom: params.get("from") || "", dateTo: params.get("to") || "", language, notes }) });
-        const payload = await response.json() as Report & { error?: string };
-        if (!response.ok) throw new Error(payload.error || "تعذر إنشاء التقرير.");
-        setReport(payload);
-      } catch (reason) { setError(reason instanceof Error ? reason.message : "تعذر إنشاء التقرير."); }
-      finally { setBusy(false); }
+    setBusy(true);
+    setError("");
+    const params = new URLSearchParams(window.location.search);
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        window.location.replace("/login");
+        return;
+      }
+      const response = await fetch("/api/reports/ai", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          projectId: params.get("project") || "",
+          dateFrom: params.get("from") || "",
+          dateTo: params.get("to") || "",
+          language,
+          notes,
+        }),
+      });
+      const payload = (await response.json()) as Report & { error?: string };
+      if (!response.ok) throw new Error(payload.error || "تعذر إنشاء التقرير.");
+      setReport(payload);
+      if (clientLogoUrl) URL.revokeObjectURL(clientLogoUrl);
+      setClientLogoUrl("");
+      if (payload.branding?.clientLogoAvailable) {
+        const logoResponse = await fetch(
+          `/api/project-branding?project=${encodeURIComponent(payload.branding.projectId)}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (logoResponse.ok)
+          setClientLogoUrl(URL.createObjectURL(await logoResponse.blob()));
+      }
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "تعذر إنشاء التقرير.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
-  const maxCondition = Math.max(1, ...(report?.condition.map(item => item.count) || [1]));
-  const maxCriticality = Math.max(1, ...(report?.criticality.map(item => item.count) || [1]));
-  return <section className="al-page ai-report-page" dir={language === "ar" ? "rtl" : "ltr"}>
-    <div className="ai-report-actions no-print"><Link className="al-secondary-button" href="/reports">{language === "ar" ? "العودة للتقارير" : "Back to reports"}</Link><button className="al-primary-button" disabled={!report} onClick={() => window.print()}>{language === "ar" ? "حفظ / طباعة PDF" : "Save / Print PDF"}</button></div>
-    {!report && <div className="ai-report-section no-print report-notes-entry"><h2>{language === "ar" ? "قبل إنشاء التقرير" : "Before generating the report"}</h2><label htmlFor="report-notes">{language === "ar" ? "ملاحظات اختيارية للمحلّل (ليست حقائق موثّقة)" : "Optional analyst notes (not verified facts)"}</label><textarea id="report-notes" value={notes} maxLength={1500} onChange={event => setNotes(event.target.value)} rows={4} placeholder={language === "ar" ? "مثل: راجع سجلات الأعطال قبل اتخاذ قرار الاستبدال…" : "E.g. check failure history before considering replacement…"} /><button className="al-primary-button" onClick={() => void generateReport()} disabled={busy}>{busy ? (language === "ar" ? "جاري التحليل…" : "Analyzing…") : (language === "ar" ? "إنشاء التقرير" : "Generate report")}</button></div>}
-    {error && <div className="al-alert" role="alert">{error}</div>}
-    {busy && <div className="route-brand-loader"><span>{language === "ar" ? "يتم تحليل المشروع وبناء التقرير…" : "Analyzing the project and building the report…"}</span><i /></div>}
-    {report && <article className="ai-report-sheet">
-      <header><div><small>ASSETLENS AI · FACILITY ASSET INTELLIGENCE</small><h1>{language === "ar" ? "تقرير النظرة التنفيذية للمشروع" : "Project Executive Asset Report"}</h1><p>{report.facts.project}</p></div><dl><div><dt>{language === "ar" ? "تاريخ الإنشاء" : "Generated"}</dt><dd>{new Date(report.generatedAt).toLocaleString(language === "ar" ? "ar-AE" : "en-GB")}</dd></div><div><dt>{language === "ar" ? "الفترة" : "Period"}</dt><dd>{report.period.from || "—"} — {report.period.to || "—"}</dd></div></dl></header>
-      <section className="ai-report-metrics"><div><span>{language === "ar" ? "إجمالي الأصول" : "Total assets"}</span><strong>{report.facts.assetCount}</strong></div><div className={(report.facts.weightedRiskPercent ?? 0) >= 35 ? "danger" : ""}><span>{language === "ar" ? "مؤشر المخاطر الموزون" : "Weighted risk index"}</span><strong>{report.facts.weightedRiskPercent == null ? "—" : `${report.facts.weightedRiskPercent}%`}</strong></div><div><span>{language === "ar" ? "حرجة وبحالة ضعيفة" : "Critical + poor"}</span><strong>{report.facts.criticalPoorCount}</strong></div><div><span>{language === "ar" ? "بانتظار الاعتماد" : "Awaiting approval"}</span><strong>{report.facts.reviewCount}</strong></div></section>
-      <section className="ai-report-section"><h2>{report.narrativeMode === "ai" ? (language === "ar" ? "ملخص تنفيذي بمساعدة AI" : "AI-assisted executive summary") : (language === "ar" ? "ملخص تنفيذي من سجل الأصول" : "Asset register executive summary")}</h2><p className="ai-narrative">{report.narrative}</p><small>{language === "ar" ? "راجع أي توصية هندسيًا قبل التنفيذ؛ البيانات غير المكتملة خارج المؤشرات المحسوبة." : "Validate recommendations before action; incomplete records are excluded from calculated metrics."}</small></section>
-      {report.userNotes && <section className="ai-report-section"><h2>{language === "ar" ? "ملاحظات المستخدم · لم تُتحقق" : "User notes · unverified"}</h2><p className="ai-narrative">{report.userNotes}</p></section>}
-      <div className="ai-report-charts"><section className="ai-report-section"><h2>Condition Rating</h2><div className="ai-report-bars">{report.condition.map(item => { const level = ASSET_CONDITION_LEVELS.find(value => value.rating === item.rating); return <div key={item.rating}><span>{item.rating} · {language === "ar" ? level?.labelAr : level?.labelEn}</span><i><b style={{ width: `${item.count * 100 / maxCondition}%` }} /></i><strong>{item.count}</strong></div>; })}</div></section><section className="ai-report-section"><h2>Criticality</h2><div className="ai-report-bars criticality">{report.criticality.map(item => { const level = ASSET_CRITICALITY_LEVELS.find(value => value.rating === item.rating); return <div key={item.rating}><span>{item.rating} · {language === "ar" ? level?.labelAr : level?.labelEn}</span><i><b style={{ width: `${item.count * 100 / maxCriticality}%` }} /></i><strong>{item.count}</strong></div>; })}</div></section></div>
-      <div className="ai-report-charts"><section className="ai-report-section"><h2>{language === "ar" ? "حالات التشغيل" : "Operational states"}</h2><ul>{report.operational.map(item => <li key={item.status}><span>{assetOperationalStatusLabel(item.status, language) || item.status}</span><strong>{item.count}</strong></li>)}</ul></section><section className="ai-report-section"><h2>{language === "ar" ? "أعلى التصنيفات" : "Top categories"}</h2><ul>{report.categories.slice(0, 8).map(item => <li key={item.name}><span>{item.name}</span><strong>{item.count}</strong></li>)}</ul></section></div>
-      <div className="ai-report-charts"><section className="ai-report-section"><h2>{language === "ar" ? "التوزيع حسب المبنى" : "Distribution by building"}</h2><ul>{report.locations.slice(0, 10).map(item => <li key={item.name}><span>{item.name}<small>{language === "ar" ? `${item.highRisk} عالي المخاطر` : `${item.highRisk} high risk`}</small></span><strong>{item.count}</strong></li>)}</ul></section><section className="ai-report-section"><h2>{language === "ar" ? "العمر المتبقي" : "Remaining life"}</h2><ul>{report.lifeBands.map(item => <li key={item.key}><span>{item.key === "unknown" ? (language === "ar" ? "غير معروف" : "Unknown") : `${item.key} ${language === "ar" ? "سنوات" : "years"}`}</span><strong>{item.count}</strong></li>)}</ul></section></div>
-      <section className="ai-report-section risk-matrix-section"><h2>{language === "ar" ? "مصفوفة المخاطر: الحالة × الأهمية" : "Risk matrix: condition × criticality"}</h2><div className="risk-matrix"><span /><b>{language === "ar" ? "منخفضة جدًا" : "Very Low"}</b><b>{language === "ar" ? "منخفضة" : "Low"}</b><b>{language === "ar" ? "مهمة" : "Important"}</b><b>{language === "ar" ? "عالية" : "High"}</b><b>{language === "ar" ? "حرجة" : "Critical"}</b>{report.riskMatrix.map(row => <div className="risk-matrix-row" key={row.conditionRating}><strong>{row.conditionRating}/5</strong>{row.cells.map(cell => <span key={cell.criticalityRating} data-risk={cell.score >= 16 ? "critical" : cell.score >= 10 ? "high" : cell.score >= 5 ? "medium" : "low"}><b>{cell.count}</b><small>{language === "ar" ? "درجة" : "score"} {cell.score}</small></span>)}</div>)}</div></section>
-      <section className="ai-report-section"><h2>{language === "ar" ? "الأصول ذات الأولوية" : "Priority assets"}</h2>{report.priorityAssets.length ? <table><thead><tr><th>{language === "ar" ? "رقم الأصل" : "Asset no."}</th><th>{language === "ar" ? "النوع والموقع" : "Type and location"}</th><th>{language === "ar" ? "البيانات الفنية" : "Identity"}</th><th>Condition</th><th>Criticality</th><th>{language === "ar" ? "المبرر / الإجراء" : "Evidence / action"}</th></tr></thead><tbody>{report.priorityAssets.map(asset => <tr key={asset.id}><td>{asset.assetNo}</td><td>{asset.assetType}<small>{asset.location || asset.building}</small></td><td>{asset.manufacturer || "—"}<small>{[asset.model, asset.serial].filter(Boolean).join(" · ") || "—"}</small></td><td>{asset.conditionRating || "—"}/5</td><td>{asset.criticalityRating || "—"}/5</td><td>{asset.conditionJustification || "—"}</td></tr>)}</tbody></table> : <p>{language === "ar" ? "لا توجد أصول ذات أولوية ضمن الفترة." : "No priority assets in this period."}</p>}</section>
-      <section className="ai-report-section action-plan-section"><h2>{language === "ar" ? "خطة العمل الزمنية" : "Phased action plan"}</h2><div className="action-plan-grid">{([["immediate", report.actionPlan.immediate, language === "ar" ? "فوري · 0–3 أشهر" : "Immediate · 0–3 months"],["near", report.actionPlan.nearTerm, language === "ar" ? "قريب · 3–12 شهرًا" : "Near term · 3–12 months"],["planned", report.actionPlan.planned, language === "ar" ? "مخطط · 12+ شهرًا" : "Planned · 12+ months"]] as const).map(([key, rows, label]) => <article key={key} className={key}><header><strong>{label}</strong><span>{rows.length}</span></header>{rows.slice(0, 8).map(asset => <p key={asset.id}><b>{asset.assetNo}</b><span>{asset.assetType} · {asset.location}</span></p>)}</article>)}</div></section>
-      <section className="ai-report-section data-quality-section"><h2>{language === "ar" ? "جودة البيانات والفجوات" : "Data quality & gaps"}</h2><div>{Object.entries(report.dataQuality).map(([key, value]) => <p key={key}><span>{key.replace(/([A-Z])/g, " $1")}</span><strong>{value}</strong><i style={{ width: `${Math.min(100, value * 100 / Math.max(1, report.facts.assetCount))}%` }} /></p>)}</div></section>
-      <section className="ai-report-section confidence-map-section"><h2>{language === "ar" ? "خريطة ثقة الذكاء الاصطناعي" : "AI Confidence Map"}</h2><p className="confidence-caveat">{language === "ar" ? `الخريطة تشمل فقط ${report.confidenceMap.scoredAssets} سجلًا حُللت صوره فعليًا (${report.confidenceMap.coveragePercent}% من النطاق). ${report.confidenceMap.unscoredAssets} سجلًا يدويًا أو مستوردًا أو غير مقيّم لم تُمنح ثقة اصطناعية.` : `Only ${report.confidenceMap.scoredAssets} image-analyzed records are scored (${report.confidenceMap.coveragePercent}% coverage). ${report.confidenceMap.unscoredAssets} manual, imported or unscored records are not assigned synthetic confidence.`}</p><div className="confidence-map-grid"><article><strong>{language === "ar" ? "نطاقات الثقة" : "Confidence bands"}</strong>{report.confidenceMap.bands.map(band => <p key={band.key}><span>{band.key}</span><b>{band.count}</b></p>)}</article><article><strong>{language === "ar" ? "أقل المباني ثقة" : "Lowest-confidence buildings"}</strong>{report.confidenceMap.byBuilding.slice(0, 8).map(row => <p key={row.name}><span>{row.name}</span><b>{row.average}% · {row.count}</b></p>)}</article></div>{report.confidenceMap.reviewAssets.length > 0 && <div className="confidence-review-list"><strong>{language === "ar" ? "أولوية المراجعة البشرية" : "Human review priority"}</strong>{report.confidenceMap.reviewAssets.slice(0, 12).map(asset => <p key={asset.id}><span>{asset.assetNo} · {asset.assetType} · {asset.building}</span><b>{asset.confidence}%</b></p>)}</div>}{report.confidenceMap.lowConfidenceFields.length > 0 && <small>{language === "ar" ? `${report.confidenceMap.lowConfidenceFields.length} حقلاً منخفض الثقة يحتاج مقارنة بالصورة الأصلية.` : `${report.confidenceMap.lowConfidenceFields.length} low-confidence fields should be checked against source images.`}</small>}</section>
-      <section className="ai-report-section ai-portfolio"><h2>{language === "ar" ? "نظرة مالية" : "Financial overview"}</h2><p><strong>{report.portfolio.value == null ? (report.portfolio.mixedCurrencies ? (language === "ar" ? "عملات متعددة · لا يمكن جمعها" : "Mixed currencies · no aggregate") : (language === "ar" ? "لا توجد تكلفة موثقة" : "No documented values")) : `${report.portfolio.value.toLocaleString(language === "ar" ? "ar-AE" : "en-GB")} ${report.portfolio.currency}`}</strong><span>{language === "ar" ? `إجمالي قيم مسجلة يغطي ${report.portfolio.coveragePercent}% من الأصول؛ ليس تقييمًا للمحفظة كاملة.` : `Sum of documented values covers ${report.portfolio.coveragePercent}% of assets; not a full portfolio valuation.`}</span></p></section>
-      <section className="ai-report-section sustainability-section"><h2>{language === "ar" ? "فرصة ترشيد الطاقة · بانتظار القياس" : "Energy opportunity · awaiting measurements"}</h2><div className="sustainability-metrics"><p><span>{language === "ar" ? "أصول مرشحة للمراجعة" : "Candidates to review"}</span><strong>{report.sustainability.candidateAssets}</strong></p><p><span>{language === "ar" ? "تتوفر لها قدرة مسجلة" : "Rated power recorded"}</span><strong>{report.sustainability.assetsWithRatedPower}</strong></p><p><span>{language === "ar" ? "الوفر السنوي" : "Annual saving"}</span><strong>—</strong></p><p><span>{language === "ar" ? "الاسترداد" : "Payback"}</span><strong>—</strong></p></div><p className="model-assumptions">{report.sustainability.limitation}</p></section>
-      <section className="ai-report-section standards-section"><h2>{language === "ar" ? "مرجع القرار الإداري" : "Management decision framework"}</h2><div>{report.standards.map(standard => <article key={standard.code}><b>{standard.code}</b><strong>{standard.title}</strong><p>{standard.application}</p></article>)}</div><small>{language === "ar" ? "هذه المراجع توجّه طريقة عرض القرار ولا تعني أن المشروع أو التقرير حاصل على اعتماد أو شهادة ISO." : "These references guide decision presentation; they do not state that the project or report is ISO certified or compliant."}</small></section>
-      <section className="ai-report-section methodology"><h2>{language === "ar" ? "المنهجية والاعتماد" : "Methodology & sign-off"}</h2><dl><div><dt>Condition</dt><dd>{report.methodology.conditionScale}</dd></div><div><dt>Criticality</dt><dd>{report.methodology.criticalityScale}</dd></div><div><dt>{language === "ar" ? "معادلة المخاطر" : "Risk formula"}</dt><dd>{report.methodology.riskFormula}</dd></div><div><dt>{language === "ar" ? "نطاق البيانات" : "Data scope"}</dt><dd>{report.methodology.scope}</dd></div></dl><p className="methodology-assurance">{report.methodology.assurance}</p><div className="report-signatures"><span>{language === "ar" ? "أعدّه" : "Prepared by"}</span><span>{language === "ar" ? "راجعه" : "Reviewed by"}</span><span>{language === "ar" ? "اعتمده" : "Approved by"}</span></div></section>
-      <footer>AssetLens AI · {report.facts.project} · {new Date(report.generatedAt).toISOString()}</footer>
-    </article>}
-  </section>;
+  const maxCondition = Math.max(
+    1,
+    ...(report?.condition.map((item) => item.count) || [1]),
+  );
+  const maxCriticality = Math.max(
+    1,
+    ...(report?.criticality.map((item) => item.count) || [1]),
+  );
+  return (
+    <section
+      className="al-page ai-report-page"
+      dir={language === "ar" ? "rtl" : "ltr"}
+    >
+      <div className="ai-report-actions no-print">
+        <Link className="al-secondary-button" href="/reports">
+          {language === "ar" ? "العودة للتقارير" : "Back to reports"}
+        </Link>
+        <button
+          className="al-primary-button"
+          disabled={!report}
+          onClick={() => {
+            const previousTitle = document.title;
+            document.title = `AssetLens AI — ${report?.facts.project || "Report"}`;
+            window.print();
+            window.setTimeout(() => {
+              document.title = previousTitle;
+            }, 500);
+          }}
+        >
+          {language === "ar" ? "حفظ / طباعة PDF" : "Save / Print PDF"}
+        </button>
+      </div>
+      {!report && (
+        <div className="ai-report-section no-print report-notes-entry">
+          <h2>
+            {language === "ar"
+              ? "قبل إنشاء التقرير"
+              : "Before generating the report"}
+          </h2>
+          <label htmlFor="report-notes">
+            {language === "ar"
+              ? "ملاحظات اختيارية للمحلّل (ليست حقائق موثّقة)"
+              : "Optional analyst notes (not verified facts)"}
+          </label>
+          <textarea
+            id="report-notes"
+            value={notes}
+            maxLength={1500}
+            onChange={(event) => setNotes(event.target.value)}
+            rows={4}
+            placeholder={
+              language === "ar"
+                ? "مثل: راجع سجلات الأعطال قبل اتخاذ قرار الاستبدال…"
+                : "E.g. check failure history before considering replacement…"
+            }
+          />
+          <button
+            className="al-primary-button"
+            onClick={() => void generateReport()}
+            disabled={busy}
+          >
+            {busy
+              ? language === "ar"
+                ? "جاري التحليل…"
+                : "Analyzing…"
+              : language === "ar"
+                ? "إنشاء التقرير"
+                : "Generate report"}
+          </button>
+        </div>
+      )}
+      {error && (
+        <div className="al-alert error" role="alert" data-scroll-alert>
+          {error}
+        </div>
+      )}
+      {busy && (
+        <div className="route-brand-loader">
+          <span>
+            {language === "ar"
+              ? "يتم تحليل المشروع وبناء التقرير…"
+              : "Analyzing the project and building the report…"}
+          </span>
+          <i />
+        </div>
+      )}
+      {report && (
+        <article className="ai-report-sheet">
+          <header>
+            <div className="ai-report-identity">
+              <div className="ai-report-logos">
+                <Image
+                  src="/assetlens-logo.png"
+                  alt="AssetLens AI"
+                  width={150}
+                  height={44}
+                  priority
+                />
+                {clientLogoUrl && (
+                  <>
+                    <i aria-hidden="true" />
+                    <Image
+                      className="client-project-logo"
+                      src={clientLogoUrl}
+                      alt={
+                        language === "ar"
+                          ? `شعار ${report.branding.projectName}`
+                          : `${report.branding.projectName} logo`
+                      }
+                      width={120}
+                      height={42}
+                      unoptimized
+                    />
+                  </>
+                )}
+              </div>
+              <div>
+                <small>ASSETLENS AI · FACILITY ASSET INTELLIGENCE</small>
+                <h1>
+                  {language === "ar"
+                    ? "تقرير دراسة استبدال وتجديد الأصول"
+                    : "Asset Replacement & Renewal Study"}
+                </h1>
+                <p>{report.facts.project}</p>
+              </div>
+            </div>
+            <dl>
+              <div>
+                <dt>{language === "ar" ? "تاريخ الإنشاء" : "Generated"}</dt>
+                <dd>
+                  {new Date(report.generatedAt).toLocaleString(
+                    language === "ar" ? "ar-AE" : "en-GB",
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>{language === "ar" ? "الفترة" : "Period"}</dt>
+                <dd>
+                  {report.period.from || "—"} — {report.period.to || "—"}
+                </dd>
+              </div>
+            </dl>
+          </header>
+          <section className="ai-report-metrics">
+            <div>
+              <span>
+                {language === "ar" ? "إجمالي الأصول" : "Total assets"}
+              </span>
+              <strong>{report.facts.assetCount}</strong>
+            </div>
+            <div
+              className={
+                (report.facts.weightedRiskPercent ?? 0) >= 35 ? "danger" : ""
+              }
+            >
+              <span>
+                {language === "ar"
+                  ? "مؤشر المخاطر الموزون"
+                  : "Weighted risk index"}
+              </span>
+              <strong>
+                {report.facts.weightedRiskPercent == null
+                  ? "—"
+                  : `${report.facts.weightedRiskPercent}%`}
+              </strong>
+            </div>
+            <div>
+              <span>
+                {language === "ar" ? "حرجة وبحالة ضعيفة" : "Critical + poor"}
+              </span>
+              <strong>{report.facts.criticalPoorCount}</strong>
+            </div>
+            <div>
+              <span>
+                {language === "ar" ? "بانتظار الاعتماد" : "Awaiting approval"}
+              </span>
+              <strong>{report.facts.reviewCount}</strong>
+            </div>
+          </section>
+          <section className="ai-report-section">
+            <h2>
+              {report.narrativeMode === "ai"
+                ? language === "ar"
+                  ? "ملخص تنفيذي بمساعدة AI"
+                  : "AI-assisted executive summary"
+                : language === "ar"
+                  ? "ملخص تنفيذي من سجل الأصول"
+                  : "Asset register executive summary"}
+            </h2>
+            <p className="ai-narrative">{report.narrative}</p>
+            <small>
+              {language === "ar"
+                ? "راجع أي توصية هندسيًا قبل التنفيذ؛ البيانات غير المكتملة خارج المؤشرات المحسوبة."
+                : "Validate recommendations before action; incomplete records are excluded from calculated metrics."}
+            </small>
+          </section>
+          {report.userNotes && (
+            <section className="ai-report-section">
+              <h2>
+                {language === "ar"
+                  ? "ملاحظات المستخدم · لم تُتحقق"
+                  : "User notes · unverified"}
+              </h2>
+              <p className="ai-narrative">{report.userNotes}</p>
+              <strong className="note-consideration-title">
+                {language === "ar" ? "كيف أُخذت في الاعتبار" : "How it was considered"}
+              </strong>
+              <p className="note-consideration">{report.noteConsideration}</p>
+            </section>
+          )}
+          <section className="ai-report-section replacement-readiness-section">
+            <h2>{language === "ar" ? "جاهزية دراسة الاستبدال" : "Replacement-study readiness"}</h2>
+            <div className="replacement-readiness-score"><strong>{report.replacementStudy.readinessPercent}%</strong><span>{language === "ar" ? "تغطية الأدلة المطلوبة لاتخاذ القرار" : "Coverage of decision evidence"}</span></div>
+            <div className="replacement-coverage-grid">
+              {Object.entries(report.replacementStudy.coverage).map(([key, value]) => <p key={key}><span>{key.replace(/([A-Z])/g, " $1")}</span><b>{value}%</b></p>)}
+            </div>
+            <small>{language === "ar" ? "النسبة تقيس اكتمال البيانات، ولا تعني دقة قرار الاستبدال دون مراجعة هندسية." : "This score measures data completeness; it does not validate a replacement decision without engineering review."}</small>
+          </section>
+          <div className="ai-report-charts">
+            <section className="ai-report-section">
+              <h2>Condition Rating</h2>
+              <div className="ai-report-bars">
+                {report.condition.map((item) => {
+                  const level = ASSET_CONDITION_LEVELS.find(
+                    (value) => value.rating === item.rating,
+                  );
+                  return (
+                    <div key={item.rating}>
+                      <span>
+                        {item.rating} ·{" "}
+                        {language === "ar" ? level?.labelAr : level?.labelEn}
+                      </span>
+                      <i>
+                        <b
+                          style={{
+                            width: `${(item.count * 100) / maxCondition}%`,
+                          }}
+                        />
+                      </i>
+                      <strong>{item.count}</strong>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+            <section className="ai-report-section">
+              <h2>Criticality</h2>
+              <div className="ai-report-bars criticality">
+                {report.criticality.map((item) => {
+                  const level = ASSET_CRITICALITY_LEVELS.find(
+                    (value) => value.rating === item.rating,
+                  );
+                  return (
+                    <div key={item.rating}>
+                      <span>
+                        {item.rating} ·{" "}
+                        {language === "ar" ? level?.labelAr : level?.labelEn}
+                      </span>
+                      <i>
+                        <b
+                          style={{
+                            width: `${(item.count * 100) / maxCriticality}%`,
+                          }}
+                        />
+                      </i>
+                      <strong>{item.count}</strong>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+          <div className="ai-report-charts">
+            <section className="ai-report-section">
+              <h2>
+                {language === "ar" ? "حالات التشغيل" : "Operational states"}
+              </h2>
+              <ul>
+                {report.operational.map((item) => (
+                  <li key={item.status}>
+                    <span>
+                      {assetOperationalStatusLabel(item.status, language) ||
+                        item.status}
+                    </span>
+                    <strong>{item.count}</strong>
+                  </li>
+                ))}
+              </ul>
+            </section>
+            <section className="ai-report-section">
+              <h2>{language === "ar" ? "أعلى التصنيفات" : "Top categories"}</h2>
+              <ul>
+                {report.categories.slice(0, 8).map((item) => (
+                  <li key={item.name}>
+                    <span>{item.name}</span>
+                    <strong>{item.count}</strong>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </div>
+          <div className="ai-report-charts">
+            <section className="ai-report-section">
+              <h2>
+                {language === "ar"
+                  ? "التوزيع حسب المبنى"
+                  : "Distribution by building"}
+              </h2>
+              <ul>
+                {report.locations.slice(0, 10).map((item) => (
+                  <li key={item.name}>
+                    <span>
+                      {item.name}
+                      <small>
+                        {language === "ar"
+                          ? `${item.highRisk} عالي المخاطر`
+                          : `${item.highRisk} high risk`}
+                      </small>
+                    </span>
+                    <strong>{item.count}</strong>
+                  </li>
+                ))}
+              </ul>
+            </section>
+            <section className="ai-report-section">
+              <h2>{language === "ar" ? "العمر المتبقي" : "Remaining life"}</h2>
+              <ul>
+                {report.lifeBands.map((item) => (
+                  <li key={item.key}>
+                    <span>
+                      {item.key === "unknown"
+                        ? language === "ar"
+                          ? "غير معروف"
+                          : "Unknown"
+                        : `${item.key} ${language === "ar" ? "سنوات" : "years"}`}
+                    </span>
+                    <strong>{item.count}</strong>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </div>
+          <section className="ai-report-section risk-matrix-section">
+            <h2>
+              {language === "ar"
+                ? "مصفوفة المخاطر: الحالة × الأهمية"
+                : "Risk matrix: condition × criticality"}
+            </h2>
+            <div className="risk-matrix">
+              <span />
+              <b>{language === "ar" ? "منخفضة جدًا" : "Very Low"}</b>
+              <b>{language === "ar" ? "منخفضة" : "Low"}</b>
+              <b>{language === "ar" ? "مهمة" : "Important"}</b>
+              <b>{language === "ar" ? "عالية" : "High"}</b>
+              <b>{language === "ar" ? "حرجة" : "Critical"}</b>
+              {report.riskMatrix.map((row) => (
+                <div className="risk-matrix-row" key={row.conditionRating}>
+                  <strong>{row.conditionRating}/5</strong>
+                  {row.cells.map((cell) => (
+                    <span
+                      key={cell.criticalityRating}
+                      data-risk={
+                        cell.score >= 16
+                          ? "critical"
+                          : cell.score >= 10
+                            ? "high"
+                            : cell.score >= 5
+                              ? "medium"
+                              : "low"
+                      }
+                    >
+                      <b>{cell.count}</b>
+                      <small>
+                        {language === "ar" ? "درجة" : "score"} {cell.score}
+                      </small>
+                    </span>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </section>
+          <section className="ai-report-section">
+            <h2>
+              {language === "ar" ? "الأصول ذات الأولوية" : "Priority assets"}
+            </h2>
+            {report.priorityAssets.length ? (
+              <table>
+                <thead>
+                  <tr>
+                    <th>{language === "ar" ? "رقم الأصل" : "Asset no."}</th>
+                    <th>
+                      {language === "ar"
+                        ? "النوع والموقع"
+                        : "Type and location"}
+                    </th>
+                    <th>
+                      {language === "ar" ? "البيانات الفنية" : "Identity"}
+                    </th>
+                    <th>Condition</th>
+                    <th>Criticality</th>
+                    <th>
+                      {language === "ar"
+                        ? "المبرر / الإجراء"
+                        : "Evidence / action"}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.priorityAssets.map((asset) => (
+                    <tr key={asset.id}>
+                      <td>{asset.assetNo}</td>
+                      <td>
+                        {asset.assetType}
+                        <small>{asset.location || asset.building}</small>
+                      </td>
+                      <td>
+                        {asset.manufacturer || "—"}
+                        <small>
+                          {[asset.model, asset.serial]
+                            .filter(Boolean)
+                            .join(" · ") || "—"}
+                        </small>
+                      </td>
+                      <td>{asset.conditionRating || "—"}/5</td>
+                      <td>{asset.criticalityRating || "—"}/5</td>
+                      <td>{asset.conditionJustification || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p>
+                {language === "ar"
+                  ? "لا توجد أصول ذات أولوية ضمن الفترة."
+                  : "No priority assets in this period."}
+              </p>
+            )}
+          </section>
+          <section className="ai-report-section action-plan-section">
+            <h2>
+              {language === "ar" ? "خطة العمل الزمنية" : "Phased action plan"}
+            </h2>
+            <div className="action-plan-grid">
+              {(
+                [
+                  [
+                    "immediate",
+                    report.actionPlan.immediate,
+                    language === "ar"
+                      ? "فوري · 0–3 أشهر"
+                      : "Immediate · 0–3 months",
+                  ],
+                  [
+                    "near",
+                    report.actionPlan.nearTerm,
+                    language === "ar"
+                      ? "قريب · 3–12 شهرًا"
+                      : "Near term · 3–12 months",
+                  ],
+                  [
+                    "planned",
+                    report.actionPlan.planned,
+                    language === "ar"
+                      ? "مخطط · 12+ شهرًا"
+                      : "Planned · 12+ months",
+                  ],
+                ] as const
+              ).map(([key, rows, label]) => (
+                <article key={key} className={key}>
+                  <header>
+                    <strong>{label}</strong>
+                    <span>{rows.length}</span>
+                  </header>
+                  {rows.slice(0, 8).map((asset) => (
+                    <p key={asset.id}>
+                      <b>{asset.assetNo}</b>
+                      <span>
+                        {asset.assetType} · {asset.location}
+                      </span>
+                    </p>
+                  ))}
+                </article>
+              ))}
+            </div>
+          </section>
+          <section className="ai-report-section replacement-study-section">
+            <h2>{language === "ar" ? "تصنيف خيارات التجديد والاستبدال" : "Renewal and replacement option classes"}</h2>
+            <div className="replacement-class-grid">
+              {[
+                ["replacementAssessment", language === "ar" ? "مرشح لدراسة الاستبدال" : "Replacement assessment"],
+                ["repairAssessment", language === "ar" ? "دراسة إصلاح/تأهيل" : "Repair/rehabilitation study"],
+                ["lifecyclePlanning", language === "ar" ? "تخطيط دورة الحياة" : "Lifecycle planning"],
+                ["monitor", language === "ar" ? "مراقبة" : "Monitor"],
+                ["completeData", language === "ar" ? "استكمال البيانات" : "Complete data"],
+              ].map(([key, label]) => <article key={key}><strong>{report.replacementStudy.classifications[key as keyof Report["replacementStudy"]["classifications"]]}</strong><span>{label}</span></article>)}
+            </div>
+            <h3>{language === "ar" ? "سيناريوهات القرار" : "Decision scenarios"}</h3>
+            <div className="replacement-scenarios">
+              {report.replacementStudy.scenarios.map((scenario) => <article key={scenario.key}><header><b>{scenario.key}</b><strong>{scenario.assetCount} {language === "ar" ? "أصل" : "assets"}</strong></header><p>{scenario.description}</p><small>{scenario.documentedCost == null ? (language === "ar" ? "التكلفة غير مكتملة" : "Cost incomplete") : `${scenario.documentedCost.toLocaleString(language === "ar" ? "ar-AE" : "en-GB")} ${report.portfolio.currency}`}</small></article>)}
+            </div>
+            <h3>{language === "ar" ? "خارطة المرشحين" : "Candidate roadmap"}</h3>
+            <div className="replacement-roadmap">{report.replacementStudy.roadmap.map((item) => <p key={item.years}><strong>{item.years}</strong><span>{language === "ar" ? "سنة" : item.years === 1 ? "year" : "years"}</span><b>{item.candidateAssets}</b></p>)}</div>
+            <ul>{report.replacementStudy.assumptions.map((assumption) => <li key={assumption}>{assumption}</li>)}</ul>
+          </section>
+          <section className="ai-report-section data-quality-section">
+            <h2>
+              {language === "ar"
+                ? "جودة البيانات والفجوات"
+                : "Data quality & gaps"}
+            </h2>
+            <div>
+              {Object.entries(report.dataQuality).map(([key, value]) => (
+                <p key={key}>
+                  <span>{key.replace(/([A-Z])/g, " $1")}</span>
+                  <strong>{value}</strong>
+                  <i
+                    style={{
+                      width: `${Math.min(100, (value * 100) / Math.max(1, report.facts.assetCount))}%`,
+                    }}
+                  />
+                </p>
+              ))}
+            </div>
+          </section>
+          <section className="ai-report-section confidence-map-section">
+            <h2>
+              {language === "ar"
+                ? "خريطة ثقة الذكاء الاصطناعي"
+                : "AI Confidence Map"}
+            </h2>
+            <p className="confidence-caveat">
+              {language === "ar"
+                ? `الخريطة تشمل فقط ${report.confidenceMap.scoredAssets} سجلًا حُللت صوره فعليًا (${report.confidenceMap.coveragePercent}% من النطاق). ${report.confidenceMap.unscoredAssets} سجلًا يدويًا أو مستوردًا أو غير مقيّم لم تُمنح ثقة اصطناعية.`
+                : `Only ${report.confidenceMap.scoredAssets} image-analyzed records are scored (${report.confidenceMap.coveragePercent}% coverage). ${report.confidenceMap.unscoredAssets} manual, imported or unscored records are not assigned synthetic confidence.`}
+            </p>
+            <div className="confidence-map-grid">
+              <article>
+                <strong>
+                  {language === "ar" ? "نطاقات الثقة" : "Confidence bands"}
+                </strong>
+                {report.confidenceMap.bands.map((band) => (
+                  <p key={band.key}>
+                    <span>{band.key}</span>
+                    <b>{band.count}</b>
+                  </p>
+                ))}
+              </article>
+              <article>
+                <strong>
+                  {language === "ar"
+                    ? "أقل المباني ثقة"
+                    : "Lowest-confidence buildings"}
+                </strong>
+                {report.confidenceMap.byBuilding.slice(0, 8).map((row) => (
+                  <p key={row.name}>
+                    <span>{row.name}</span>
+                    <b>
+                      {row.average}% · {row.count}
+                    </b>
+                  </p>
+                ))}
+              </article>
+            </div>
+            {report.confidenceMap.reviewAssets.length > 0 && (
+              <div className="confidence-review-list">
+                <strong>
+                  {language === "ar"
+                    ? "أولوية المراجعة البشرية"
+                    : "Human review priority"}
+                </strong>
+                {report.confidenceMap.reviewAssets.slice(0, 12).map((asset) => (
+                  <p key={asset.id}>
+                    <span>
+                      {asset.assetNo} · {asset.assetType} · {asset.building}
+                    </span>
+                    <b>{asset.confidence}%</b>
+                  </p>
+                ))}
+              </div>
+            )}
+            {report.confidenceMap.lowConfidenceFields.length > 0 && (
+              <small>
+                {language === "ar"
+                  ? `${report.confidenceMap.lowConfidenceFields.length} حقلاً منخفض الثقة يحتاج مقارنة بالصورة الأصلية.`
+                  : `${report.confidenceMap.lowConfidenceFields.length} low-confidence fields should be checked against source images.`}
+              </small>
+            )}
+          </section>
+          <section className="ai-report-section ai-portfolio">
+            <h2>{language === "ar" ? "نظرة مالية" : "Financial overview"}</h2>
+            <p>
+              <strong>
+                {report.portfolio.value == null
+                  ? report.portfolio.mixedCurrencies
+                    ? language === "ar"
+                      ? "عملات متعددة · لا يمكن جمعها"
+                      : "Mixed currencies · no aggregate"
+                    : language === "ar"
+                      ? "لا توجد تكلفة موثقة"
+                      : "No documented values"
+                  : `${report.portfolio.value.toLocaleString(language === "ar" ? "ar-AE" : "en-GB")} ${report.portfolio.currency}`}
+              </strong>
+              <span>
+                {language === "ar"
+                  ? `إجمالي قيم مسجلة يغطي ${report.portfolio.coveragePercent}% من الأصول؛ ليس تقييمًا للمحفظة كاملة.`
+                  : `Sum of documented values covers ${report.portfolio.coveragePercent}% of assets; not a full portfolio valuation.`}
+              </span>
+            </p>
+          </section>
+          <section className="ai-report-section sustainability-section">
+            <h2>
+              {language === "ar"
+                ? "فرصة ترشيد الطاقة · بانتظار القياس"
+                : "Energy opportunity · awaiting measurements"}
+            </h2>
+            <div className="sustainability-metrics">
+              <p>
+                <span>
+                  {language === "ar"
+                    ? "أصول مرشحة للمراجعة"
+                    : "Candidates to review"}
+                </span>
+                <strong>{report.sustainability.candidateAssets}</strong>
+              </p>
+              <p>
+                <span>
+                  {language === "ar"
+                    ? "تتوفر لها قدرة مسجلة"
+                    : "Rated power recorded"}
+                </span>
+                <strong>{report.sustainability.assetsWithRatedPower}</strong>
+              </p>
+              <p>
+                <span>
+                  {language === "ar" ? "الوفر السنوي" : "Annual saving"}
+                </span>
+                <strong>—</strong>
+              </p>
+              <p>
+                <span>{language === "ar" ? "الاسترداد" : "Payback"}</span>
+                <strong>—</strong>
+              </p>
+            </div>
+            <p className="model-assumptions">
+              {report.sustainability.limitation}
+            </p>
+          </section>
+          <section className="ai-report-section client-recommendations-section">
+            <h2>{language === "ar" ? "التوصيات المقترحة للعميل" : "Recommended client actions"}</h2>
+            {report.recommendations.length ? report.recommendations.map((recommendation) => <article key={`${recommendation.priority}-${recommendation.title}`}><header><b>{recommendation.priority}</b><strong>{recommendation.title}</strong><span>{language === "ar" ? `ثقة الدليل ${recommendation.confidence}%` : `Evidence confidence ${recommendation.confidence}%`}</span></header><p>{recommendation.action}</p><small>{language === "ar" ? "الدليل" : "Evidence"}: {recommendation.evidence}</small></article>) : <p>{language === "ar" ? "لا توجد توصية آلية قابلة للدفاع عنها ضمن البيانات الحالية؛ راجع فجوات البيانات أولًا." : "No defensible automated recommendation can be issued from the current data; review data gaps first."}</p>}
+          </section>
+          <section className="ai-report-section standards-section">
+            <h2>
+              {language === "ar"
+                ? "مرجع القرار الإداري"
+                : "Management decision framework"}
+            </h2>
+            <div>
+              {report.standards.map((standard) => (
+                <article key={standard.code}>
+                  <b>{standard.code}</b>
+                  <strong>{standard.title}</strong>
+                  <p>{standard.application}</p>
+                </article>
+              ))}
+            </div>
+            <small>
+              {language === "ar"
+                ? "هذه المراجع توجّه طريقة عرض القرار ولا تعني أن المشروع أو التقرير حاصل على اعتماد أو شهادة ISO."
+                : "These references guide decision presentation; they do not state that the project or report is ISO certified or compliant."}
+            </small>
+          </section>
+          <section className="ai-report-section methodology">
+            <h2>
+              {language === "ar"
+                ? "المنهجية والاعتماد"
+                : "Methodology & sign-off"}
+            </h2>
+            <dl>
+              <div>
+                <dt>Condition</dt>
+                <dd>{report.methodology.conditionScale}</dd>
+              </div>
+              <div>
+                <dt>Criticality</dt>
+                <dd>{report.methodology.criticalityScale}</dd>
+              </div>
+              <div>
+                <dt>{language === "ar" ? "معادلة المخاطر" : "Risk formula"}</dt>
+                <dd>{report.methodology.riskFormula}</dd>
+              </div>
+              <div>
+                <dt>{language === "ar" ? "نطاق البيانات" : "Data scope"}</dt>
+                <dd>{report.methodology.scope}</dd>
+              </div>
+            </dl>
+            <p className="methodology-assurance">
+              {report.methodology.assurance}
+            </p>
+            <div className="report-signatures">
+              <span>{language === "ar" ? "أعدّه" : "Prepared by"}</span>
+              <span>{language === "ar" ? "راجعه" : "Reviewed by"}</span>
+              <span>{language === "ar" ? "اعتمده" : "Approved by"}</span>
+            </div>
+          </section>
+          <footer>
+            AssetLens AI · {report.facts.project} ·{" "}
+            {new Date(report.generatedAt).toISOString()}
+          </footer>
+        </article>
+      )}
+    </section>
+  );
 }

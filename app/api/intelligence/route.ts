@@ -3,6 +3,7 @@ import { answerAssetLens } from "../../lib/server/ask-assetlens";
 import { canUseModule } from "../../lib/module-permissions";
 import { moduleAccessFor } from "../../lib/server/module-access";
 import { requestToken, supabaseRest, supabaseRestAll, verifyAuthUser } from "../../lib/server/supabase";
+import { apiErrorResponse } from "../../lib/server/api-errors";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -24,7 +25,7 @@ function mapAsset(asset: AssetRow): IntelligenceAsset {
     building: asset.building_name || "Unassigned",
     location: [asset.building_name, asset.floor_name, asset.zone_name, asset.office_name].filter(Boolean).join(" / ") || "Unassigned",
     conditionRating: asset.condition_rating, criticalityRating: asset.criticality_rating, operationalStatus: asset.operational_status || "active",
-    replacementCost: asset.replacement_cost ?? asset.estimated_price, remainingLifeYears: asset.remaining_life_years,
+    replacementCost: asset.replacement_cost, remainingLifeYears: asset.remaining_life_years,
     fields: Array.isArray(asset.fields) ? asset.fields : [],
   };
 }
@@ -59,8 +60,8 @@ export async function GET(request: Request) {
       supabaseRest<ScenarioRow[]>(`capital_scenarios?select=id,project_id,name,annual_budget,horizon_years,assumptions,created_at&project_id=eq.${encodeURIComponent(projectId)}&order=created_at.desc&limit=20`, token),
     ]);
     const dependencies = mapDependencies(dependencyRows);
-    return Response.json({ projects, projectId, assets, dependencies, scenarios, twin: buildDigitalTwin(assets), permissions: access.permissions.find(permission => permission.module === "intelligence") }, { headers: { "Cache-Control": "private, no-store" } });
-  } catch (reason) { return Response.json({ error: reason instanceof Error ? reason.message : "Asset Intelligence could not be loaded." }, { status: 500 }); }
+    return Response.json({ projects, projectId, assets, dependencies, scenarios, twin: buildDigitalTwin(assets), permissions: access.permissions.find(permission => permission.module === "intelligence"), aiReportAccess: canUseModule(access.permissions, "ai_reports") && canUseModule(access.permissions, "reports", "export") }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (reason) { return apiErrorResponse(reason, "تعذر تحميل مركز ذكاء الأصول."); }
 }
 
 export async function POST(request: Request) {
@@ -115,5 +116,5 @@ export async function POST(request: Request) {
       return Response.json({ scenario: rows[0], simulation: simulateCapitalPlan(assets, annualBudget, horizonYears) }, { status: 201 });
     }
     return Response.json({ error: "Unsupported intelligence action." }, { status: 400 });
-  } catch (reason) { return Response.json({ error: reason instanceof Error ? reason.message : "Asset Intelligence action failed." }, { status: 500 }); }
+  } catch (reason) { return apiErrorResponse(reason, "تعذر إكمال عملية ذكاء الأصول."); }
 }

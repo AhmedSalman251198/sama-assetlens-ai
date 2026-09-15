@@ -57,7 +57,8 @@ test("AI reports label unverified notes and never include invented energy tariff
   assert.match(route, /hasModuleAccess\(token, user.id, "ai_reports"\)/);
   assert.match(route, /unverifiedUserNotes/);
   assert.match(route, /annualEnergySavingKwh: null/);
-  assert.match(route, /Number\(asset\.replacement_cost \?\? asset\.estimated_price\) > 0/);
+  assert.match(route, /Number\(asset\.replacement_cost\) > 0/);
+  assert.match(route, /hasOnlyGroundedNumbers/);
   assert.doesNotMatch(route, /annualOperatingHours:\s*2400|electricityTariffAedPerKwh:\s*0\.38/);
 });
 
